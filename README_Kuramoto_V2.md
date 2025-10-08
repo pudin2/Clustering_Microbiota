@@ -4,8 +4,6 @@ Este proyecto implementa un pipeline completo para estudiar la estructura de com
 
 Flujo del pipeline (bloques 0–11)
 
-Portada y contexto – Introduce la motivación del problema y explica brevemente qué es la diversidad alfa, la fusión de grafos y el modelo de Kuramoto.
-
 Configuración – Importa las librerías principales (NumPy, SciPy, pandas, matplotlib) y trata de instalar silenciosamente paquetes opcionales como networkx, python‑louvain o igraph/leidenalg. Si no están disponibles, el código proporciona alternativas. Se definen semillas para reproducibilidad, las rutas de trabajo (Datos y Resultados) y los parámetros por defecto: número de vecinos TOPK=12, pesos de fusión (alpha=0.35, ppmi=0.45, clr=0.20), valores de K_g para el barrido logarítmico y argumentos por defecto para el simulador de Kuramoto y la afinidad de fase.
 
 Autodescubrimiento del archivo OTU – Busca automáticamente el fichero de OTUs en el directorio ./Datos (*.otus, *otu*.tsv, *.csv, etc.). Si no encuentra ninguno, genera un conjunto sintético pequeño para permitir pruebas.
