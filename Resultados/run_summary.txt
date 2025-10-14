@@ -1,0 +1,8 @@
+Forma de la matriz OTU: 4720 OTUs x 441 muestras
+TOPK de fusión: 12
+Número de aristas en el grafo fusionado: 3622
+Densidad del grafo fusionado: 1.8624e-02
+Mejor K_g: 0.8455376158406002
+Mejor modularidad Q: 0.756260591877653
+Número de clústeres: 35
+Método de clustering usado: label_propagation_fallback
