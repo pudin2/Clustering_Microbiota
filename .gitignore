@@ -19,3 +19,4 @@ Kernel_Tests/out/
 Kernel_Tests/**/*.fls
 Kernel_Tests/**/*.fdb_latexmk
 Kernel_Tests/**/*.synctex.gz
+outputs_gui

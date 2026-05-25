@@ -1,7 +1,0 @@
-{
-  "transform_method": "none",
-  "scale": true,
-  "scaler": "StandardScaler()",
-  "embedding_method": "pca",
-  "embedding_model": "PCA(n_components=3, random_state=42)"
-}
