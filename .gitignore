@@ -19,3 +19,12 @@ Kernel_Tests/out/
 Kernel_Tests/**/*.fls
 Kernel_Tests/**/*.fdb_latexmk
 Kernel_Tests/**/*.synctex.gz
+
+# Cache de Python (global)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Salidas generadas por la GUI
+outputs_gui/
