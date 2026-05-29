@@ -1,6 +1,0 @@
-DataFrame de grupos: anthro_data
-DataFrame de variables: anthro_data
-Columna de grupo: sex
-Grupos comparados: Female vs Male
-Observaciones tras merge: 441
-Variables evaluadas: 25

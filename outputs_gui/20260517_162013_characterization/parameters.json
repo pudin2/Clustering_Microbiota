@@ -1,8 +1,0 @@
-{
-  "df_name": "food_groups_u24h",
-  "numeric_cols": null,
-  "analysis_mode": "both",
-  "bins": 80,
-  "plot_positive_hist": true,
-  "verbose": true
-}
