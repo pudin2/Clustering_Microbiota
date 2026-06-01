@@ -404,16 +404,21 @@ class MicrobiotaGUI(tk.Tk):
         ttk.Button(output_btns, text="Cambiar", command=self.choose_output_dir).grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(output_btns, text="Abrir", command=self.open_output_dir).grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
-        memory_box = ttk.LabelFrame(sidebar, text="Resultados en memoria", padding=8)
+        memory_box = ttk.LabelFrame(sidebar, text="Resultados cargados", padding=8)
         memory_box.grid(row=4, column=0, sticky="ew", pady=(0, 10))
         memory_box.grid_columnconfigure(0, weight=1)
-        self.result_tree = ttk.Treeview(memory_box, columns=("time",), show="tree headings", height=5)
+        self.result_tree = ttk.Treeview(memory_box, columns=("created",), show="tree headings", height=5)
         self.result_tree.heading("#0", text="Analisis")
-        self.result_tree.heading("time", text="Hora")
+        self.result_tree.heading("created", text="Fecha")
         self.result_tree.column("#0", width=180, stretch=True)
-        self.result_tree.column("time", width=85, stretch=False)
+        self.result_tree.column("created", width=125, stretch=False)
         self.result_tree.grid(row=0, column=0, sticky="ew")
         self.result_tree.bind("<<TreeviewSelect>>", self.on_result_selected)
+        result_btns = ttk.Frame(memory_box)
+        result_btns.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        result_btns.grid_columnconfigure((0, 1), weight=1)
+        ttk.Button(result_btns, text="Cargar corrida", command=self.load_run_folder).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(result_btns, text="Historial", command=self.load_saved_runs).grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         log_box = ttk.LabelFrame(sidebar, text="Log", padding=8)
         log_box.grid(row=5, column=0, sticky="nsew")
@@ -930,8 +935,10 @@ class MicrobiotaGUI(tk.Tk):
         header.grid_columnconfigure(0, weight=1)
         self.results_title_var = tk.StringVar(value="Sin resultados cargados")
         ttk.Label(header, textvariable=self.results_title_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Button(header, text="Cargar manifest", command=self.load_manifest_file).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(header, text="Abrir carpeta", command=self.open_active_run_dir).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(header, text="Cargar corrida", command=self.load_run_folder).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(header, text="Cargar manifest", command=self.load_manifest_file).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(header, text="Historial", command=self.load_saved_runs).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(header, text="Abrir carpeta", command=self.open_active_run_dir).grid(row=0, column=4, padx=(8, 0))
 
         paned = ttk.PanedWindow(self.results_tab, orient="horizontal")
         paned.grid(row=1, column=0, sticky="nsew")
@@ -1979,23 +1986,168 @@ class MicrobiotaGUI(tk.Tk):
         )
         if not path:
             return
-        manifest_path = Path(path)
+        self._load_manifest_path(Path(path))
+
+
+    def load_run_folder(self):
+        path = filedialog.askdirectory(
+            title="Cargar carpeta de resultados",
+            initialdir=self.output_dir_var.get() or str(DEFAULT_OUTPUT_DIR),
+        )
+        if not path:
+            return
+
+        manifest_path = Path(path) / "manifest.json"
+        if not manifest_path.exists():
+            messagebox.showerror(APP_TITLE, f"La carpeta seleccionada no contiene manifest.json:\n{Path(path)}")
+            return
+
+        self._load_manifest_path(manifest_path)
+
+
+    def load_saved_runs(self):
+        output_root = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR).expanduser()
+        if not output_root.exists():
+            messagebox.showinfo(APP_TITLE, f"No existe la carpeta de salida:\n{output_root}")
+            return
+
+        manifest_paths = self._discover_manifest_paths(output_root)
+        if not manifest_paths:
+            messagebox.showinfo(APP_TITLE, f"No se encontraron corridas con manifest.json en:\n{output_root}")
+            return
+
+        loaded = 0
+        selected_key = None
+        for manifest_path in manifest_paths:
+            key = self._load_manifest_path(manifest_path, select=False, quiet=True)
+            if key:
+                loaded += 1
+                selected_key = selected_key or key
+
+        if selected_key:
+            self.result_tree.selection_set(selected_key)
+            self.result_tree.focus(selected_key)
+            self.show_result_key(selected_key)
+
+        self._log(f"Historial cargado desde {output_root}: {loaded} corrida(s).")
+        self.status_var.set(f"Historial cargado: {loaded} corrida(s).")
+
+
+    def _discover_manifest_paths(self, output_root):
+        output_root = Path(output_root)
+        candidates = []
+
+        direct_manifest = output_root / "manifest.json"
+        if direct_manifest.exists():
+            candidates.append(direct_manifest)
+
+        candidates.extend(output_root.glob("*/manifest.json"))
+        unique = {}
+        for path in candidates:
+            try:
+                unique[str(path.resolve())] = path
+            except OSError:
+                unique[str(path)] = path
+
+        return sorted(
+            unique.values(),
+            key=lambda item: item.stat().st_mtime if item.exists() else 0,
+            reverse=True,
+        )
+
+
+    def _load_manifest_path(self, manifest_path, select=True, quiet=False):
+        manifest_path = Path(manifest_path)
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"No se pudo leer el manifest:\n{exc}")
-            return
+            if not quiet:
+                messagebox.showerror(APP_TITLE, f"No se pudo leer el manifest:\n{exc}")
+            return None
 
-        analysis = manifest.get("analysis", "resultado")
-        key = unique_name(f"{analysis}_{_dt.datetime.now().strftime('%H%M%S')}", self.result_manifests)
+        key = self._register_result_manifest(
+            manifest=manifest,
+            run_dir=manifest_path.parent,
+            result=None,
+            manifest_path=manifest_path,
+            select=select,
+        )
+        if key and not quiet:
+            self._log(f"Manifest cargado: {manifest_path}")
+        return key
+
+
+    def _register_result_manifest(self, manifest, run_dir, result=None, manifest_path=None, select=True):
+        run_dir = Path(run_dir)
+        manifest_path = Path(manifest_path) if manifest_path else run_dir / "manifest.json"
+
+        existing_key = self._existing_result_key_for_manifest(manifest_path)
+        if existing_key:
+            if select:
+                self.result_tree.selection_set(existing_key)
+                self.result_tree.focus(existing_key)
+                self.show_result_key(existing_key)
+            return existing_key
+
+        key = unique_name(self._result_key_from_manifest(manifest, run_dir), self.result_manifests)
+        self.results[key] = result
         self.result_manifests[key] = manifest
-        self.result_run_dirs[key] = manifest_path.parent
-        self.results[key] = None
-        self.result_tree.insert("", "end", iid=key, text=key, values=(_dt.datetime.now().strftime("%H:%M:%S"),))
-        self.result_tree.selection_set(key)
-        self.result_tree.focus(key)
-        self.show_result_key(key)
-        self._log(f"Manifest cargado: {manifest_path}")
+        self.result_run_dirs[key] = run_dir
+        self.result_tree.insert("", "end", iid=key, text=key, values=(self._format_result_created(manifest, manifest_path),))
+
+        if select:
+            self.result_tree.selection_set(key)
+            self.result_tree.focus(key)
+            self.show_result_key(key)
+
+        return key
+
+
+    def _existing_result_key_for_manifest(self, manifest_path):
+        try:
+            target = Path(manifest_path).resolve()
+        except OSError:
+            target = Path(manifest_path)
+
+        for key, run_dir in self.result_run_dirs.items():
+            try:
+                current = (Path(run_dir) / "manifest.json").resolve()
+            except OSError:
+                current = Path(run_dir) / "manifest.json"
+            if current == target:
+                return key
+        return None
+
+
+    def _result_key_from_manifest(self, manifest, run_dir):
+        analysis = manifest.get("analysis") or Path(run_dir).name or "resultado"
+        created = str(manifest.get("created_at", "")).strip()
+        stamp = ""
+        if created:
+            try:
+                stamp = _dt.datetime.fromisoformat(created).strftime("%Y%m%d_%H%M%S")
+            except ValueError:
+                stamp = sanitize_name(created, "")
+        if not stamp:
+            stamp = sanitize_name(Path(run_dir).name, _dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        return sanitize_name(f"{analysis}_{stamp}", "resultado")
+
+
+    def _format_result_created(self, manifest, manifest_path=None):
+        created = str(manifest.get("created_at", "")).strip()
+        if created:
+            try:
+                return _dt.datetime.fromisoformat(created).strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return created[:16]
+
+        if manifest_path:
+            try:
+                return _dt.datetime.fromtimestamp(Path(manifest_path).stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            except OSError:
+                pass
+
+        return _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
     def on_result_selected(self, _event=None):
@@ -2042,6 +2194,30 @@ class MicrobiotaGUI(tk.Tk):
                     "end",
                     iid=iid,
                     text=name,
+                    values=(rows, cols)
+                )
+
+            for i, array in enumerate(manifest.get("arrays", []), start=1):
+                path = self._artifact_path(array.get("path", ""))
+                if path.suffix.lower() != ".csv":
+                    continue
+
+                shape = array.get("shape", [])
+                rows = shape[0] if len(shape) >= 1 else ""
+                cols = shape[1] if len(shape) >= 2 else 1
+                table = {
+                    "name": f"{array.get('name', path.stem)} (array)",
+                    "path": array.get("path", str(path)),
+                    "rows": rows,
+                    "columns": cols,
+                }
+                iid = f"{key}_array_{i}"
+                self.visible_tables[iid] = table
+                self.table_list.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    text=table["name"],
                     values=(rows, cols)
                 )
 
@@ -2525,20 +2701,19 @@ class MicrobiotaGUI(tk.Tk):
                 kind = message[0]
                 if kind == "done":
                     _, analysis, result, run_dir, manifest, log_text = message
-                    key = unique_name(f"{analysis}_{_dt.datetime.now().strftime('%H%M%S')}", self.result_manifests)
-                    self.results[key] = result
-                    self.result_manifests[key] = manifest
-                    self.result_run_dirs[key] = Path(run_dir)
                     self.last_run_dir = Path(run_dir)
-                    self.result_tree.insert("", "end", iid=key, text=key, values=(_dt.datetime.now().strftime("%H:%M:%S"),))
-                    self.result_tree.selection_set(key)
-                    self.result_tree.focus(key)
+                    key = self._register_result_manifest(
+                        manifest=manifest,
+                        run_dir=run_dir,
+                        result=result,
+                        manifest_path=Path(run_dir) / "manifest.json",
+                        select=True,
+                    )
                     if log_text:
                         self._log(log_text.rstrip())
                     self._log(f"Terminado: {analysis}")
                     self._log(f"Salida: {run_dir}")
                     self._log(f"Tablas: {len(manifest.get('tables', []))} | Arrays: {len(manifest.get('arrays', []))} | Figuras: {len(manifest.get('figures', []))}")
-                    self.show_result_key(key)
                     self.status_var.set(f"Listo. Ultima salida: {run_dir}")
                 elif kind == "error":
                     _, analysis, trace = message
