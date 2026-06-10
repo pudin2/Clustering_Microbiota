@@ -2197,29 +2197,6 @@ class MicrobiotaGUI(tk.Tk):
                     values=(rows, cols)
                 )
 
-            for i, array in enumerate(manifest.get("arrays", []), start=1):
-                path = self._artifact_path(array.get("path", ""))
-                if path.suffix.lower() != ".csv":
-                    continue
-
-                shape = array.get("shape", [])
-                rows = shape[0] if len(shape) >= 1 else ""
-                cols = shape[1] if len(shape) >= 2 else 1
-                table = {
-                    "name": f"{array.get('name', path.stem)} (array)",
-                    "path": array.get("path", str(path)),
-                    "rows": rows,
-                    "columns": cols,
-                }
-                iid = f"{key}_array_{i}"
-                self.visible_tables[iid] = table
-                self.table_list.insert(
-                    "",
-                    "end",
-                    iid=iid,
-                    text=table["name"],
-                    values=(rows, cols)
-                )
 
             for i, figure_path in enumerate(manifest.get("figures", []), start=1):
                 iid = f"{key}_figure_{i}"
