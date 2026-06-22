@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import traceback
+import unicodedata
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -17,6 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
 
 try:
     from PIL import Image, ImageTk
@@ -32,10 +35,120 @@ from KDE import kde_from_loaded
 from Kruscall_Wallis import kruskal_wallis_from_loaded
 from Mann_Whitney import mann_whitney_from_loaded
 from DB_Scan import dbscan_from_loaded
+from Exploration import (
+    cluster_review_from_loaded,
+    correlation_from_loaded,
+    dataset_profile_from_loaded,
+    dimensionality_from_loaded,
+    visualization_from_loaded,
+)
+from Smart_Assistant import AssistantResponse, OpenAssistantEngine
 
 
 APP_TITLE = "Microbiota Statistical Workbench"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs_gui"
+HELP_ICON_TEXT = "!"
+
+HELP_TEXTS = {
+    "__button__.Cargar": "Carga uno o varios archivos CSV o tabulados. Cada archivo queda disponible como dataset dentro de la sesion.",
+    "__button__.Vista": "Abre una vista rapida del dataset seleccionado para revisar columnas y primeras filas.",
+    "__button__.Quitar": "Quita de memoria el dataset seleccionado. No borra el archivo original.",
+    "__button__.Cambiar": "Cambia la carpeta donde se guardan tablas, figuras y manifiestos de cada corrida.",
+    "__button__.Abrir": "Abre la carpeta de salida actual en el explorador de archivos.",
+    "__button__.Cargar corrida": "Carga una carpeta de resultados previamente generada para verla en el panel Resultados.",
+    "__button__.Historial": "Busca corridas guardadas dentro de la carpeta de salida y las lista en Resultados.",
+    "__button__.Abrir seleccionado": "Abre la tabla, figura o HTML interactivo seleccionado con la aplicacion predeterminada.",
+    "__button__.Actualizar vista": "Recarga la previsualizacion del resultado seleccionado.",
+    "__button__.Abrir carpeta": "Abre la carpeta completa de la corrida activa.",
+    "__button__.Perfilar dataset": "Analiza tipos de columnas, faltantes, continuidad probable y bins sugeridos. Es el primer paso recomendado.",
+    "__button__.Calcular correlaciones": "Calcula Pearson y Spearman, matriz de correlacion, p-valores y correcciones por multiples pruebas.",
+    "__button__.Generar visualizaciones": "Genera las visualizaciones configuradas y las guarda como corrida.",
+    "__button__.Actualizar constructor": "Redibuja la grafica del constructor usando las capas marcadas.",
+    "__button__.Guardar constructor": "Guarda la grafica actual del constructor, los datos usados y el manifest en Resultados.",
+    "__button__.Ejecutar caracterizacion": "Genera resumen descriptivo e histogramas del dataset seleccionado.",
+    "__button__.Ejecutar normalidad": "Evalua supuestos de distribucion para variables numericas.",
+    "__button__.Ejecutar KDE": "Estima densidades KDE para abundancias positivas y compara kernels.",
+    "__button__.Ejecutar Kruskal-Wallis": "Compara tres o mas grupos para cada variable numerica seleccionada.",
+    "__button__.Ejecutar Mann-Whitney": "Compara dos grupos para cada variable numerica seleccionada.",
+    "__button__.Ejecutar reduccion": "Aplica preprocesamiento y reduccion dimensional sin hacer clustering.",
+    "__button__.Ejecutar DBSCAN": "Ejecuta DBSCAN con los parametros definidos y guarda tablas, metricas y figuras.",
+    "__button__.Revisar clusterizacion": "Evalua clusters ya existentes con metricas internas, tamanos, ruido y recomendacion.",
+    "__button__.Preguntar": "Envia tu pregunta al asistente. Puede responder con reglas locales o con Ollama si lo activas.",
+    "__button__.Analizar datasets": "Resume los datasets cargados y recomienda el primer paso.",
+    "__button__.Aplicar sugerencias": "Llena automaticamente los campos sugeridos por el asistente en la pestaña correspondiente.",
+    "df_name": "Elige el dataset cargado que quieres analizar.",
+    "assistant_dataset": "Dataset sobre el que quieres preguntar. Si lo dejas vacio, el asistente escoge uno.",
+    "assistant_question": "Escribe tu duda en lenguaje natural: que quieres comparar, graficar, limpiar o probar.",
+    "assistant_use_ollama": "Activa esto si tienes Ollama local corriendo con un modelo abierto descargado.",
+    "assistant_model": "Nombre del modelo local de Ollama, por ejemplo qwen2.5:3b, llama3.2:3b o mistral.",
+    "data_df_name": "Elige el dataset que contiene las variables principales del analisis.",
+    "meta_df_name": "Dataset con variables descriptivas para anexar o resumir; puede ser el mismo dataset principal.",
+    "id_col": "Columna que identifica cada muestra o persona. Usualmente ID.",
+    "meta_id_col": "Columna ID del dataset meta para unirlo con el resultado.",
+    "numeric_cols": "Columnas numericas a analizar. Puedes seleccionar varias; se iran acumulando separadas por coma.",
+    "feature_cols": "Variables numericas que entran al modelo o metrica. Selecciona varias si quieres comparar perfiles.",
+    "value_cols": "Variables que se analizaran como valores de respuesta. Si queda vacio, se usan las numericas disponibles.",
+    "group_col": "Columna categorica que define grupos, por ejemplo sex, bmi_class o ciudad.",
+    "groups_to_compare": "Selecciona exactamente dos grupos para Mann-Whitney.",
+    "alpha": "Nivel de significancia. 0.05 es comun; valores menores son mas estrictos.",
+    "bins": "Numero de barras del histograma. Si no sabes, usa Exploracion para ver bins sugeridos.",
+    "max_category_values": "Maximo de categorias frecuentes que se listan por columna categorica.",
+    "analysis_mode": "by_column analiza variable por variable; full_matrix aplana todas; both ejecuta ambos.",
+    "value_mode": "all usa todos los valores; positive solo positivos; both compara ambos enfoques.",
+    "test_method": "Prueba estadistica de distribucion. both ejecuta Shapiro y Anderson cuando aplica.",
+    "min_non_null": "Minimo de datos no faltantes para aceptar una variable en el calculo.",
+    "max_plot_vars": "Maximo de variables dibujadas en el heatmap para mantenerlo legible.",
+    "x_col": "Variable del eje X para graficas conjuntas y el constructor visual.",
+    "y_col": "Variable del eje Y para graficas conjuntas y el constructor visual.",
+    "hue_col": "Variable para colorear o comparar grupos. Puede dejarse vacia.",
+    "violin_cols": "Variables numericas para graficos de violin. Puedes seleccionar varias.",
+    "rank_abundance": "Activa rank-abundancia para datos tipo OTU o abundancias.",
+    "abundance_cols": "Columnas de abundancia. Si queda vacio, se intentan usar las numericas del dataset.",
+    "abundance_id_col": "Columna de identificador que no debe tratarse como abundancia.",
+    "top_n": "Numero maximo de OTUs o features a mostrar en rank-abundancia.",
+    "log_scale": "Usa escala logaritmica cuando los valores tienen rangos muy diferentes.",
+    "grid_size": "Cantidad de puntos para evaluar KDE. Mas puntos dan curva mas fina, pero tarda mas.",
+    "cv_subsample": "Muestras usadas para validar bandwidth. Aumentarlo mejora estabilidad y aumenta tiempo.",
+    "cv_folds": "Particiones para validacion cruzada. Usa 3 si no estas seguro.",
+    "cv_bw_grid": "Cantidad de bandwidths candidatos por kernel.",
+    "min_bandwidth": "Piso minimo del bandwidth para evitar curvas artificialmente estrechas.",
+    "cv_max_expansions": "Cuantas veces se amplia la busqueda si el mejor bandwidth cae en un borde.",
+    "test_kernel_bandwidths": "Opcional: escribe kernel=valor, por ejemplo gaussian=1.5, cauchy=2.",
+    "min_group_size": "Minimo de observaciones por grupo para aceptar una prueba.",
+    "apply_fdr": "Aplica Benjamini-Hochberg para controlar falsos descubrimientos.",
+    "missing_strategy": "Como tratar faltantes: fill_zero, drop_rows o median.",
+    "remove_zero_rows": "Quita filas cuya suma numerica es cero. Util en matrices de abundancia.",
+    "min_prevalence": "Filtro de variables por proporcion minima de valores positivos. Ejemplo: 0.05.",
+    "min_total_abundance": "Filtro por suma minima de abundancia en una variable.",
+    "transform_method": "Transformacion antes de modelar: none, log1p o clr.",
+    "pseudocount": "Valor agregado antes de CLR para evitar log de cero. Usualmente 1.0.",
+    "scale": "Estandariza variables para que ninguna domine solo por escala.",
+    "embedding_method": "Tecnica de reduccion: pca es la opcion inicial mas interpretable.",
+    "n_components": "Numero de dimensiones de salida. Usa 2 para graficar, 3 si quieres mas estructura.",
+    "random_state": "Semilla para reproducibilidad.",
+    "embedding_kwargs": "Opciones avanzadas en JSON, por ejemplo {\"perplexity\": 20}. Puede quedar vacio.",
+    "variance_thresholds": "Umbrales para revisar cuantas componentes PCA explican la varianza. Ejemplo: 0.8, 0.9, 0.95.",
+    "eps": "Radio de vecindad de DBSCAN. Revisalo con k-distance.",
+    "min_samples": "Minimo de vecinos para formar region densa.",
+    "calculate_k_distance": "Calcula una curva de distancia para orientar la eleccion de eps.",
+    "k_distance_min_samples": "Vecino usado en la curva k-distance. Suele coincidir con min_samples o ser cercano.",
+    "summary_numeric_cols": "Variables numericas que se resumiran por cluster.",
+    "summary_categorical_cols": "Variables categoricas que se contaran por cluster.",
+    "summary_numeric_aggs": "Agregaciones separadas por coma: median, mean, min, max.",
+    "label_col": "Columna que contiene etiquetas de cluster ya calculadas.",
+    "ignore_noise": "Ignora la etiqueta de ruido al calcular metricas internas.",
+    "noise_label": "Etiqueta usada para ruido. En DBSCAN normalmente es -1.",
+    "layer_scatter": "Muestra puntos individuales.",
+    "layer_line": "Une puntos ordenados por X. Util en series o trayectorias.",
+    "layer_trend": "Agrega una tendencia lineal para ver direccion general.",
+    "layer_density": "Agrega una capa de densidad/hexbin debajo de los puntos.",
+    "layer_centroids": "Marca promedios por grupo cuando hay columna Color.",
+    "builder_log_x": "Usa escala logaritmica en X.",
+    "builder_log_y": "Usa escala logaritmica en Y.",
+    "point_alpha": "Opacidad de puntos entre 0 y 1.",
+    "point_size": "Tamano de los puntos en la grafica.",
+    "verbose": "Escribe detalles de la ejecucion en el log lateral.",
+}
 
 
 def sanitize_name(value, fallback="artifact"):
@@ -68,6 +181,20 @@ def parse_optional_float(text):
     if not text:
         return None
     return float(text)
+
+
+def parse_optional_int(text):
+    text = str(text).strip()
+    if not text:
+        return None
+    return int(text)
+
+
+def parse_float_tuple(text, default=None):
+    items = split_list(text)
+    if not items:
+        return default
+    return tuple(float(item) for item in items)
 
 
 def parse_bool(value):
@@ -137,6 +264,85 @@ def json_safe(value):
     return repr(value)
 
 
+class HelpTooltip:
+
+    def __init__(self, widget, text, delay_ms=350, wraplength=340):
+        self.widget = widget
+        self.text = str(text)
+        self.delay_ms = delay_ms
+        self.wraplength = wraplength
+        self._after_id = None
+        self._tip = None
+
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<Button-1>", self._toggle, add="+")
+
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+
+    def _cancel(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+
+    def _toggle(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            self._hide()
+        else:
+            self._show()
+
+
+    def _show(self):
+        if self._tip is not None or not self.text:
+            return
+
+        try:
+            x = self.widget.winfo_rootx() + 18
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        except Exception:
+            x, y = 100, 100
+
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        self._tip.attributes("-topmost", True)
+
+        frame = tk.Frame(self._tip, background="#fff7d6", borderwidth=1, relief="solid")
+        frame.pack(fill="both", expand=True)
+
+        label = tk.Label(
+            frame,
+            text=self.text,
+            justify="left",
+            background="#fff7d6",
+            foreground="#20242a",
+            font=("Segoe UI", 9),
+            padx=10,
+            pady=7,
+            wraplength=self.wraplength,
+        )
+        label.pack()
+
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
 class FigureCapture:
     def __init__(self, figure_dir):
         self.figure_dir = Path(figure_dir)
@@ -198,7 +404,7 @@ class ArtifactExporter:
         self.tables_dir.mkdir(parents=True, exist_ok=True)
         self.arrays_dir.mkdir(parents=True, exist_ok=True)
         self.objects_dir.mkdir(parents=True, exist_ok=True)
-        self.manifest = {"tables": [], "arrays": [], "objects": []}
+        self.manifest = {"tables": [], "arrays": [], "objects": [], "html": []}
         self.excel_tables = []
 
 
@@ -209,6 +415,17 @@ class ArtifactExporter:
 
 
     def _export_obj(self, obj, prefix):
+        if getattr(obj, "artifact_kind", None) == "html":
+            filename = getattr(obj, "filename", None) or f"{prefix}.html"
+            path = self.objects_dir / sanitize_name(Path(filename).stem, prefix)
+            path = path.with_suffix(".html")
+            path.write_text(getattr(obj, "html", ""), encoding="utf-8")
+            self.manifest["html"].append({
+                "name": getattr(obj, "title", prefix),
+                "path": str(path)
+            })
+            return
+
         if isinstance(obj, pd.DataFrame):
             path = self.tables_dir / f"{prefix}.csv"
             obj.to_csv(path, index=False, encoding="utf-8-sig")
@@ -238,7 +455,10 @@ class ArtifactExporter:
             scalar_items = {}
             for key, value in obj.items():
                 child_prefix = sanitize_name(f"{prefix}_{key}", prefix)
-                if isinstance(value, (pd.DataFrame, pd.Series, np.ndarray, dict, list, tuple)):
+                if (
+                    getattr(value, "artifact_kind", None) == "html"
+                    or isinstance(value, (pd.DataFrame, pd.Series, np.ndarray, dict, list, tuple))
+                ):
                     self._export_obj(value, child_prefix)
                 else:
                     scalar_items[str(key)] = json_safe(value)
@@ -339,6 +559,9 @@ class MicrobiotaGUI(tk.Tk):
         self.group_value_dropdowns = []
         self.loading_result_view = False
         self.results_lists_notebook = None
+        self.assistant_engine = OpenAssistantEngine(self.dfs)
+        self.assistant_last_response = None
+        self.assistant_suggestion_payload = None
 
         self._configure_style()
         self._build_ui()
@@ -355,6 +578,7 @@ class MicrobiotaGUI(tk.Tk):
         style.configure("Sidebar.TFrame", background="#eef1f4")
         style.configure("Header.TLabel", background="#f5f6f8", foreground="#20242a", font=("Segoe UI", 16, "bold"))
         style.configure("Subtle.TLabel", background="#f5f6f8", foreground="#5d6673")
+        style.configure("Help.TLabel", background="#fff2b8", foreground="#7a4d00", font=("Segoe UI", 9, "bold"))
         style.configure("TLabelframe", background="#f5f6f8")
         style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
@@ -382,9 +606,15 @@ class MicrobiotaGUI(tk.Tk):
         btns = ttk.Frame(data_box)
         btns.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         btns.grid_columnconfigure((0, 1, 2), weight=1)
-        ttk.Button(btns, text="Cargar", command=self.load_files).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(btns, text="Vista", command=self.preview_selected_dataset).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(btns, text="Quitar", command=self.remove_selected_dataset).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        load_btn = ttk.Button(btns, text="Cargar", command=self.load_files)
+        load_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._decorate_button_help(load_btn, "Cargar")
+        preview_btn = ttk.Button(btns, text="Vista", command=self.preview_selected_dataset)
+        preview_btn.grid(row=0, column=1, sticky="ew", padx=4)
+        self._decorate_button_help(preview_btn, "Vista")
+        remove_btn = ttk.Button(btns, text="Quitar", command=self.remove_selected_dataset)
+        remove_btn.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        self._decorate_button_help(remove_btn, "Quitar")
 
         self.dataset_tree = ttk.Treeview(data_box, columns=("shape",), show="tree headings", height=8)
         self.dataset_tree.heading("#0", text="Nombre")
@@ -401,8 +631,12 @@ class MicrobiotaGUI(tk.Tk):
         output_btns = ttk.Frame(output_box)
         output_btns.grid(row=1, column=0, sticky="ew")
         output_btns.grid_columnconfigure((0, 1), weight=1)
-        ttk.Button(output_btns, text="Cambiar", command=self.choose_output_dir).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(output_btns, text="Abrir", command=self.open_output_dir).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        change_btn = ttk.Button(output_btns, text="Cambiar", command=self.choose_output_dir)
+        change_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._decorate_button_help(change_btn, "Cambiar")
+        open_btn = ttk.Button(output_btns, text="Abrir", command=self.open_output_dir)
+        open_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._decorate_button_help(open_btn, "Abrir")
 
         memory_box = ttk.LabelFrame(sidebar, text="Resultados cargados", padding=8)
         memory_box.grid(row=4, column=0, sticky="ew", pady=(0, 10))
@@ -417,8 +651,12 @@ class MicrobiotaGUI(tk.Tk):
         result_btns = ttk.Frame(memory_box)
         result_btns.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         result_btns.grid_columnconfigure((0, 1), weight=1)
-        ttk.Button(result_btns, text="Cargar corrida", command=self.load_run_folder).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(result_btns, text="Historial", command=self.load_saved_runs).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        load_run_btn = ttk.Button(result_btns, text="Cargar corrida", command=self.load_run_folder)
+        load_run_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._decorate_button_help(load_run_btn, "Cargar corrida")
+        history_btn = ttk.Button(result_btns, text="Historial", command=self.load_saved_runs)
+        history_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._decorate_button_help(history_btn, "Historial")
 
         log_box = ttk.LabelFrame(sidebar, text="Log", padding=8)
         log_box.grid(row=5, column=0, sticky="nsew")
@@ -433,17 +671,27 @@ class MicrobiotaGUI(tk.Tk):
         main.grid_rowconfigure(2, weight=1)
 
         ttk.Label(main, text="Panel de analisis", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(main, text="Escoge parametros, ejecuta y guarda tablas/figuras automaticamente.", style="Subtle.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 12))
+        ttk.Label(
+            main,
+            text=f"Empieza por Exploracion. Usa {HELP_ICON_TEXT} para saber que poner en cada campo o boton.",
+            style="Subtle.TLabel"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 12))
 
         self.notebook = ttk.Notebook(main)
         self.notebook.grid(row=2, column=0, sticky="nsew")
 
+        self._build_assistant_tab()
+        self._build_exploration_tab()
         self._build_characterization_tab()
         self._build_normality_tab()
+        self._build_correlation_tab()
+        self._build_visualization_tab()
         self._build_kde_tab()
         self._build_kruskal_tab()
         self._build_mann_whitney_tab()
+        self._build_dimensionality_tab()
         self._build_dbscan_tab()
+        self._build_cluster_review_tab()
         self._build_results_tab()
 
         self.status_var = tk.StringVar(value="Listo")
@@ -466,8 +714,48 @@ class MicrobiotaGUI(tk.Tk):
         return box
 
 
-    def _add_entry(self, box, group, key, label, default="", row=0, col=0, width=22):
-        ttk.Label(box, text=label).grid(row=row, column=col, sticky="w", padx=(0, 8), pady=4)
+    def _help_text(self, group, key, label, kind="field", explicit=None):
+        if explicit:
+            return explicit
+        if group and key:
+            text = HELP_TEXTS.get(f"{group}.{key}")
+            if text:
+                return text
+        if key:
+            text = HELP_TEXTS.get(key)
+            if text:
+                return text
+        if kind == "button":
+            return f"Ejecuta la accion '{label}'. Los resultados se muestran en el log y, cuando aplica, en la pestaña Resultados."
+        if kind == "check":
+            return f"Activa o desactiva esta opcion: {label}."
+        if kind == "columns":
+            return f"Selecciona una o varias columnas para '{label}'. Cada seleccion se agrega separada por coma."
+        return f"Completa el campo '{label}' con el valor solicitado para este analisis."
+
+
+    def _add_help_marker(self, parent, text, row=0, column=1, sticky="w", padx=(6, 0)):
+        marker = ttk.Label(parent, text=HELP_ICON_TEXT, style="Help.TLabel", padding=(5, 1))
+        marker.grid(row=row, column=column, sticky=sticky, padx=padx)
+        HelpTooltip(marker, text)
+        return marker
+
+
+    def _add_label_with_help(self, box, group, key, label, row, col, kind="field", help_text=None):
+        frame = ttk.Frame(box)
+        frame.grid(row=row, column=col, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(frame, text=label).grid(row=0, column=0, sticky="w")
+        self._add_help_marker(
+            frame,
+            self._help_text(group, key, label, kind=kind, explicit=help_text),
+            row=0,
+            column=1,
+        )
+        return frame
+
+
+    def _add_entry(self, box, group, key, label, default="", row=0, col=0, width=22, help_text=None):
+        self._add_label_with_help(box, group, key, label, row, col, help_text=help_text)
         var = tk.StringVar(value=str(default))
         entry = ttk.Entry(box, textvariable=var, width=width)
         entry.grid(row=row, column=col + 1, sticky="ew", pady=4, padx=(0, 16))
@@ -484,14 +772,18 @@ class MicrobiotaGUI(tk.Tk):
         dataset_key,
         row=0,
         col=0,
-        width=42
+        width=42,
+        help_text=None
     ):
-        ttk.Label(box, text=label).grid(
-            row=row,
-            column=col,
-            sticky="w",
-            padx=(0, 8),
-            pady=4
+        self._add_label_with_help(
+            box,
+            group,
+            key,
+            label,
+            row,
+            col,
+            kind="columns",
+            help_text=help_text
         )
 
         numeric_var = tk.StringVar(value="")
@@ -617,14 +909,18 @@ class MicrobiotaGUI(tk.Tk):
         dataset_key,
         row=0,
         col=0,
-        width=42
+        width=42,
+        help_text=None
     ):
-        ttk.Label(box, text=label).grid(
-            row=row,
-            column=col,
-            sticky="w",
-            padx=(0, 8),
-            pady=4
+        self._add_label_with_help(
+            box,
+            group,
+            key,
+            label,
+            row,
+            col,
+            kind="columns",
+            help_text=help_text
         )
 
         categorical_var = tk.StringVar(value="")
@@ -748,14 +1044,18 @@ class MicrobiotaGUI(tk.Tk):
         column_key,
         row=0,
         col=0,
-        width=42
+        width=42,
+        help_text=None
     ):
-        ttk.Label(box, text=label).grid(
-            row=row,
-            column=col,
-            sticky="w",
-            padx=(0, 8),
-            pady=4
+        self._add_label_with_help(
+            box,
+            group,
+            key,
+            label,
+            row,
+            col,
+            kind="columns",
+            help_text=help_text
         )
 
         value_var = tk.StringVar(value="")
@@ -881,8 +1181,22 @@ class MicrobiotaGUI(tk.Tk):
                 break
 
 
-    def _add_combo(self, box, group, key, label, values, default="", row=0, col=0, width=22, dataset_combo=False, column_for=None):
-        ttk.Label(box, text=label).grid(row=row, column=col, sticky="w", padx=(0, 8), pady=4)
+    def _add_combo(
+        self,
+        box,
+        group,
+        key,
+        label,
+        values,
+        default="",
+        row=0,
+        col=0,
+        width=22,
+        dataset_combo=False,
+        column_for=None,
+        help_text=None
+    ):
+        self._add_label_with_help(box, group, key, label, row, col, help_text=help_text)
 
         var = tk.StringVar(value=default)
 
@@ -910,18 +1224,45 @@ class MicrobiotaGUI(tk.Tk):
         return combo
 
 
-    def _add_check(self, box, group, key, label, default=True, row=0, col=0):
+    def _add_check(self, box, group, key, label, default=True, row=0, col=0, help_text=None):
         var = tk.BooleanVar(value=default)
-        check = ttk.Checkbutton(box, text=label, variable=var)
-        check.grid(row=row, column=col, columnspan=2, sticky="w", pady=4, padx=(0, 16))
+        frame = ttk.Frame(box)
+        frame.grid(row=row, column=col, columnspan=2, sticky="w", pady=4, padx=(0, 16))
+        check = ttk.Checkbutton(frame, text=label, variable=var)
+        check.grid(row=0, column=0, sticky="w")
+        self._add_help_marker(
+            frame,
+            self._help_text(group, key, label, kind="check", explicit=help_text),
+            row=0,
+            column=1,
+        )
         self.inputs.setdefault(group, {})[key] = var
         return check
 
 
-    def _run_button(self, parent, row, label, command):
-        btn = ttk.Button(parent, text=label, style="Accent.TButton", command=command)
-        btn.grid(row=row, column=0, sticky="ew", pady=(4, 0))
+    def _run_button(self, parent, row, label, command, help_text=None):
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=0, sticky="ew", pady=(4, 0))
+        frame.grid_columnconfigure(0, weight=1)
+        btn = ttk.Button(frame, text=label, style="Accent.TButton", command=command)
+        btn.grid(row=0, column=0, sticky="ew")
+        self._add_help_marker(
+            frame,
+            self._help_text(None, None, label, kind="button", explicit=HELP_TEXTS.get(f"__button__.{label}") or help_text),
+            row=0,
+            column=1,
+            padx=(8, 0),
+        )
         return btn
+
+
+    def _decorate_button_help(self, button, label, help_text=None):
+        button.configure(text=f"{label} {HELP_ICON_TEXT}")
+        HelpTooltip(
+            button,
+            help_text or HELP_TEXTS.get(f"__button__.{label}") or self._help_text(None, None, label, kind="button")
+        )
+        return button
 
 
     def _build_results_tab(self):
@@ -935,10 +1276,18 @@ class MicrobiotaGUI(tk.Tk):
         header.grid_columnconfigure(0, weight=1)
         self.results_title_var = tk.StringVar(value="Sin resultados cargados")
         ttk.Label(header, textvariable=self.results_title_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Button(header, text="Cargar corrida", command=self.load_run_folder).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(header, text="Cargar manifest", command=self.load_manifest_file).grid(row=0, column=2, padx=(8, 0))
-        ttk.Button(header, text="Historial", command=self.load_saved_runs).grid(row=0, column=3, padx=(8, 0))
-        ttk.Button(header, text="Abrir carpeta", command=self.open_active_run_dir).grid(row=0, column=4, padx=(8, 0))
+        load_run_btn = ttk.Button(header, text="Cargar corrida", command=self.load_run_folder)
+        load_run_btn.grid(row=0, column=1, padx=(8, 0))
+        self._decorate_button_help(load_run_btn, "Cargar corrida")
+        load_manifest_btn = ttk.Button(header, text="Cargar manifest", command=self.load_manifest_file)
+        load_manifest_btn.grid(row=0, column=2, padx=(8, 0))
+        self._decorate_button_help(load_manifest_btn, "Cargar manifest", "Carga directamente un archivo manifest.json de una corrida guardada.")
+        history_btn = ttk.Button(header, text="Historial", command=self.load_saved_runs)
+        history_btn.grid(row=0, column=3, padx=(8, 0))
+        self._decorate_button_help(history_btn, "Historial")
+        open_run_btn = ttk.Button(header, text="Abrir carpeta", command=self.open_active_run_dir)
+        open_run_btn.grid(row=0, column=4, padx=(8, 0))
+        self._decorate_button_help(open_run_btn, "Abrir carpeta")
 
         paned = ttk.PanedWindow(self.results_tab, orient="horizontal")
         paned.grid(row=1, column=0, sticky="nsew")
@@ -1002,8 +1351,12 @@ class MicrobiotaGUI(tk.Tk):
         list_buttons = ttk.Frame(left)
         list_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         list_buttons.grid_columnconfigure((0, 1), weight=1)
-        ttk.Button(list_buttons, text="Abrir seleccionado", command=self.open_selected_result_file).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(list_buttons, text="Actualizar vista", command=self.refresh_active_result_view).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        open_selected_btn = ttk.Button(list_buttons, text="Abrir seleccionado", command=self.open_selected_result_file)
+        open_selected_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._decorate_button_help(open_selected_btn, "Abrir seleccionado")
+        refresh_btn = ttk.Button(list_buttons, text="Actualizar vista", command=self.refresh_active_result_view)
+        refresh_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._decorate_button_help(refresh_btn, "Actualizar vista")
 
         self.preview_notebook = ttk.Notebook(right)
         self.preview_notebook.grid(row=0, column=0, sticky="nsew")
@@ -1043,6 +1396,151 @@ class MicrobiotaGUI(tk.Tk):
         fig_y.grid(row=0, column=1, sticky="ns")
         fig_x.grid(row=1, column=0, sticky="ew")
         self.figure_canvas.configure(yscrollcommand=fig_y.set, xscrollcommand=fig_x.set)
+
+
+    def _build_assistant_tab(self):
+        group = "assistant"
+        tab = self._new_tab("Asistente")
+        tab.grid_rowconfigure(2, weight=1)
+
+        setup_box = self._section(tab, "Pequeno matematico", 0)
+        self._add_combo(
+            setup_box,
+            group,
+            "assistant_dataset",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True,
+            help_text=HELP_TEXTS["assistant_dataset"],
+        )
+        self._add_check(
+            setup_box,
+            group,
+            "assistant_use_ollama",
+            "Usar Ollama local",
+            False,
+            0,
+            2,
+            help_text=HELP_TEXTS["assistant_use_ollama"],
+        )
+        self._add_entry(
+            setup_box,
+            group,
+            "assistant_model",
+            "Modelo",
+            "qwen2.5:3b",
+            1,
+            0,
+            help_text=HELP_TEXTS["assistant_model"],
+        )
+
+        question_box = self._section(tab, "Pregunta en lenguaje natural", 1)
+        label_frame = ttk.Frame(question_box)
+        label_frame.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        ttk.Label(label_frame, text="Pregunta").grid(row=0, column=0, sticky="w")
+        self._add_help_marker(label_frame, HELP_TEXTS["assistant_question"], row=0, column=1)
+        self.assistant_question_text = tk.Text(
+            question_box,
+            height=5,
+            wrap="word",
+            relief="solid",
+            borderwidth=1,
+            bg="#ffffff",
+            fg="#20242a",
+        )
+        self.assistant_question_text.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+        self.assistant_question_text.insert(
+            "1.0",
+            "Quiero comparar glucosa entre grupos de sexo. Que prueba y parametros uso?"
+        )
+
+        actions = ttk.Frame(question_box)
+        actions.grid(row=2, column=0, columnspan=4, sticky="ew")
+        actions.grid_columnconfigure((0, 2, 4), weight=1)
+        ask_btn = ttk.Button(actions, text="Preguntar", style="Accent.TButton", command=self.ask_assistant)
+        ask_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._add_help_marker(actions, HELP_TEXTS["__button__.Preguntar"], row=0, column=1, padx=(0, 10))
+        analyze_btn = ttk.Button(actions, text="Analizar datasets", command=self.ask_assistant_dataset_summary)
+        analyze_btn.grid(row=0, column=2, sticky="ew", padx=(6, 6))
+        self._add_help_marker(actions, HELP_TEXTS["__button__.Analizar datasets"], row=0, column=3, padx=(0, 10))
+        apply_btn = ttk.Button(actions, text="Aplicar sugerencias", command=self.apply_assistant_suggestions)
+        apply_btn.grid(row=0, column=4, sticky="ew", padx=(6, 0))
+        self._add_help_marker(actions, HELP_TEXTS["__button__.Aplicar sugerencias"], row=0, column=5)
+
+        response_box = ttk.LabelFrame(tab, text="Respuesta y sugerencias", padding=8)
+        response_box.grid(row=2, column=0, sticky="nsew", pady=(0, 12))
+        response_box.grid_rowconfigure(0, weight=1)
+        response_box.grid_columnconfigure(0, weight=1)
+        self.assistant_response_text = tk.Text(
+            response_box,
+            height=18,
+            wrap="word",
+            relief="flat",
+            bg="#ffffff",
+            fg="#20242a",
+        )
+        self.assistant_response_text.grid(row=0, column=0, sticky="nsew")
+        assistant_scroll = ttk.Scrollbar(response_box, orient="vertical", command=self.assistant_response_text.yview)
+        assistant_scroll.grid(row=0, column=1, sticky="ns")
+        self.assistant_response_text.configure(yscrollcommand=assistant_scroll.set)
+        self._set_assistant_text(
+            "Carga datasets y preguntame que quieres hacer. "
+            "Puedo sugerir pruebas, preprocesamiento, graficas y parametros para llenar la app."
+        )
+
+
+    def _build_exploration_tab(self):
+        group = "exploration"
+        tab = self._new_tab("Exploracion")
+        box = self._section(tab, "Perfilado de variables", 0)
+
+        self._add_combo(
+            box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "numeric_cols",
+            "Forzar numericas",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "max_category_values",
+            "Max categorias",
+            "12",
+            1,
+            2
+        )
+
+        self._add_check(
+            box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            2,
+            0
+        )
+
+        self._run_button(tab, 1, "Perfilar dataset", lambda: self.run_analysis("exploration"))
 
 
     def _build_characterization_tab(self):
@@ -1199,6 +1697,170 @@ class MicrobiotaGUI(tk.Tk):
         )
 
         self._run_button(tab, 1, "Ejecutar normalidad", lambda: self.run_analysis("normality"))
+
+
+    def _build_correlation_tab(self):
+        group = "correlation"
+        tab = self._new_tab("Correlacion")
+        box = self._section(tab, "Pearson y Spearman", 0)
+
+        self._add_combo(
+            box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "numeric_cols",
+            "Variables",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_entry(box, group, "alpha", "Alpha", "0.05", 1, 2)
+        self._add_entry(box, group, "min_non_null", "Min datos", "3", 2, 0)
+        self._add_entry(box, group, "max_plot_vars", "Max heatmap", "25", 2, 2)
+        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 3, 0)
+
+        self._run_button(tab, 1, "Calcular correlaciones", lambda: self.run_analysis("correlation"))
+
+
+    def _build_visualization_tab(self):
+        group = "visualization"
+        tab = self._new_tab("Visualizaciones")
+
+        joint_box = self._section(tab, "Variables conjuntas", 0)
+        self._add_combo(
+            joint_box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+        self._add_combo(joint_box, group, "x_col", "X", [], "", 1, 0, column_for=("visualization", "df_name"))
+        self._add_combo(joint_box, group, "y_col", "Y", [], "", 1, 2, column_for=("visualization", "df_name"))
+        self._add_combo(joint_box, group, "hue_col", "Color", [], "", 2, 0, column_for=("visualization", "df_name"))
+
+        violin_box = self._section(tab, "Violines", 1)
+        self._add_combo(violin_box, group, "group_col", "Grupo", [], "", 0, 0, column_for=("visualization", "df_name"))
+        self._add_numeric_columns_dropdown(
+            violin_box,
+            group,
+            "violin_cols",
+            "Variables",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        rank_box = self._section(tab, "Rank-abundancia", 2)
+        self._add_check(rank_box, group, "rank_abundance", "Generar rank-abundancia", False, 0, 0)
+        self._add_combo(rank_box, group, "abundance_id_col", "ID", [], "", 0, 2, column_for=("visualization", "df_name"))
+        self._add_numeric_columns_dropdown(
+            rank_box,
+            group,
+            "abundance_cols",
+            "Columnas abundancia",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+        self._add_entry(rank_box, group, "top_n", "Top N", "2000", 1, 2)
+        self._add_check(rank_box, group, "log_scale", "Escala log", True, 2, 0)
+        self._add_check(rank_box, group, "verbose", "Mostrar resumen en log", True, 2, 2)
+
+        builder_box = self._section(tab, "Constructor visual", 3)
+        self._add_check(builder_box, group, "layer_scatter", "Puntos", True, 0, 0)
+        self._add_check(builder_box, group, "layer_line", "Linea", False, 0, 2)
+        self._add_check(builder_box, group, "layer_trend", "Tendencia", True, 1, 0)
+        self._add_check(builder_box, group, "layer_density", "Densidad", False, 1, 2)
+        self._add_check(builder_box, group, "layer_centroids", "Centroides", True, 2, 0)
+        self._add_check(builder_box, group, "builder_log_x", "Log X", False, 2, 2)
+        self._add_check(builder_box, group, "builder_log_y", "Log Y", False, 3, 0)
+        self._add_entry(builder_box, group, "point_alpha", "Opacidad", "0.75", 3, 2)
+        self._add_entry(builder_box, group, "point_size", "Tamano puntos", "34", 4, 0)
+
+        builder_actions = ttk.Frame(tab)
+        builder_actions.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        builder_actions.grid_columnconfigure((0, 2), weight=1)
+        update_btn = ttk.Button(
+            builder_actions,
+            text="Actualizar constructor",
+            style="Accent.TButton",
+            command=self.update_visual_builder
+        )
+        update_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._add_help_marker(
+            builder_actions,
+            HELP_TEXTS["__button__.Actualizar constructor"],
+            row=0,
+            column=1,
+            padx=(0, 10),
+        )
+        save_btn = ttk.Button(
+            builder_actions,
+            text="Guardar constructor",
+            style="Accent.TButton",
+            command=self.save_visual_builder_output
+        )
+        save_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self._add_help_marker(
+            builder_actions,
+            HELP_TEXTS["__button__.Guardar constructor"],
+            row=0,
+            column=3,
+        )
+
+        builder_preview = ttk.LabelFrame(tab, text="Vista interactiva", padding=8)
+        builder_preview.grid(row=5, column=0, sticky="nsew", pady=(0, 12))
+        builder_preview.grid_rowconfigure(1, weight=1)
+        builder_preview.grid_columnconfigure(0, weight=1)
+        ttk.Label(
+            builder_preview,
+            text="Elige dataset, X, Y y marca capas. Despues pulsa Actualizar constructor.",
+            style="Subtle.TLabel"
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        self.visual_builder_figure = Figure(figsize=(8.6, 5.2), dpi=100)
+        self.visual_builder_ax = self.visual_builder_figure.add_subplot(111)
+        self.visual_builder_ax.text(
+            0.5,
+            0.5,
+            "Selecciona variables y actualiza el constructor",
+            ha="center",
+            va="center",
+            transform=self.visual_builder_ax.transAxes,
+        )
+        self.visual_builder_ax.set_axis_off()
+        self.visual_builder_canvas = FigureCanvasTkAgg(self.visual_builder_figure, master=builder_preview)
+        self.visual_builder_canvas.draw()
+        self.visual_builder_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+        self.visual_builder_toolbar = NavigationToolbar2Tk(
+            self.visual_builder_canvas,
+            builder_preview,
+            pack_toolbar=False
+        )
+        self.visual_builder_toolbar.grid(row=2, column=0, sticky="ew")
+        self.visual_builder_current_data = None
+        self.visual_builder_current_config = None
+
+        self._run_button(tab, 6, "Generar visualizaciones", lambda: self.run_analysis("visualization"))
 
 
     def _build_kde_tab(self):
@@ -1485,6 +2147,42 @@ class MicrobiotaGUI(tk.Tk):
             "Ejecutar Mann-Whitney",
             lambda: self.run_analysis("mann_whitney")
         )
+
+
+    def _build_dimensionality_tab(self):
+        group = "dimensionality"
+        tab = self._new_tab("Reduccion")
+
+        data_box = self._section(tab, "Datos y preprocesamiento", 0)
+        self._add_combo(data_box, group, "data_df_name", "Dataset", [], "", 0, 0, dataset_combo=True)
+        self._add_combo(data_box, group, "id_col", "ID", [], "", 0, 2, column_for=("dimensionality", "data_df_name"))
+        self._add_numeric_columns_dropdown(
+            data_box,
+            group,
+            "feature_cols",
+            "Features",
+            dataset_key="data_df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+        self._add_combo(data_box, group, "missing_strategy", "Faltantes", ["fill_zero", "drop_rows", "median"], "fill_zero", 2, 0)
+        self._add_check(data_box, group, "remove_zero_rows", "Quitar filas suma 0", True, 2, 2)
+        self._add_entry(data_box, group, "min_prevalence", "Min prevalence", "", 3, 0)
+        self._add_entry(data_box, group, "min_total_abundance", "Min abundance", "", 3, 2)
+
+        model_box = self._section(tab, "Reduccion dimensional", 1)
+        self._add_combo(model_box, group, "transform_method", "Transformacion", ["none", "log1p", "clr"], "none", 0, 0)
+        self._add_entry(model_box, group, "pseudocount", "Pseudocount", "1.0", 0, 2)
+        self._add_check(model_box, group, "scale", "Escalar variables", True, 1, 0)
+        self._add_combo(model_box, group, "embedding_method", "Embedding", ["none", "pca", "kpca", "isomap", "mds", "tsne", "umap"], "pca", 1, 2)
+        self._add_entry(model_box, group, "n_components", "Componentes", "3", 2, 0)
+        self._add_entry(model_box, group, "random_state", "Random state", "42", 2, 2)
+        self._add_entry(model_box, group, "embedding_kwargs", "Embedding JSON", "", 3, 0)
+        self._add_entry(model_box, group, "variance_thresholds", "Umbrales PCA", "0.8, 0.9, 0.95", 3, 2)
+        self._add_check(model_box, group, "verbose", "Mostrar resumen en log", True, 4, 0)
+
+        self._run_button(tab, 2, "Ejecutar reduccion", lambda: self.run_analysis("dimensionality"))
 
 
     def _build_dbscan_tab(self):
@@ -1789,6 +2487,584 @@ class MicrobiotaGUI(tk.Tk):
         )
 
 
+    def _build_cluster_review_tab(self):
+        group = "cluster_review"
+        tab = self._new_tab("Revision clusters")
+        box = self._section(tab, "Metricas y criterios", 0)
+
+        self._add_combo(
+            box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "label_col",
+            "Columna cluster",
+            [],
+            "",
+            0,
+            2,
+            column_for=("cluster_review", "df_name")
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "feature_cols",
+            "Features",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_check(box, group, "ignore_noise", "Ignorar ruido", True, 2, 0)
+        self._add_entry(box, group, "noise_label", "Etiqueta ruido", "-1", 2, 2)
+        self._add_entry(box, group, "min_cluster_size", "Min cluster", "3", 3, 0)
+        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 3, 2)
+
+        self._run_button(tab, 1, "Revisar clusterizacion", lambda: self.run_analysis("cluster_review"))
+
+
+    def _input_value(self, group, key, default=""):
+        var = self.inputs.get(group, {}).get(key)
+        if var is None:
+            return default
+        return var.get()
+
+
+    def _collect_visual_builder_config(self):
+        group = "visualization"
+        df_name = self._input_value(group, "df_name").strip()
+        x_col = self._input_value(group, "x_col").strip()
+        y_col = self._input_value(group, "y_col").strip()
+        hue_col = self._input_value(group, "hue_col").strip()
+
+        if not df_name:
+            raise ValueError("Selecciona un dataset.")
+        if df_name not in self.dfs:
+            raise KeyError(f"No existe el dataset '{df_name}'.")
+        if not x_col or not y_col:
+            raise ValueError("Selecciona variables X e Y para construir la grafica.")
+
+        alpha = float(self._input_value(group, "point_alpha", "0.75") or 0.75)
+        point_size = float(self._input_value(group, "point_size", "34") or 34)
+
+        return {
+            "df_name": df_name,
+            "x_col": x_col,
+            "y_col": y_col,
+            "hue_col": hue_col or None,
+            "layer_scatter": parse_bool(self.inputs[group]["layer_scatter"].get()),
+            "layer_line": parse_bool(self.inputs[group]["layer_line"].get()),
+            "layer_trend": parse_bool(self.inputs[group]["layer_trend"].get()),
+            "layer_density": parse_bool(self.inputs[group]["layer_density"].get()),
+            "layer_centroids": parse_bool(self.inputs[group]["layer_centroids"].get()),
+            "builder_log_x": parse_bool(self.inputs[group]["builder_log_x"].get()),
+            "builder_log_y": parse_bool(self.inputs[group]["builder_log_y"].get()),
+            "point_alpha": min(max(alpha, 0.05), 1.0),
+            "point_size": min(max(point_size, 4), 300),
+        }
+
+
+    def _prepare_visual_builder_data(self, config):
+        df = self.dfs[config["df_name"]].copy()
+        x_col = config["x_col"]
+        y_col = config["y_col"]
+        hue_col = config["hue_col"]
+
+        for col in [x_col, y_col]:
+            if col not in df.columns:
+                raise KeyError(f"La columna '{col}' no existe en '{config['df_name']}'.")
+        if hue_col and hue_col not in df.columns:
+            raise KeyError(f"La columna de color '{hue_col}' no existe en '{config['df_name']}'.")
+
+        cols = [x_col, y_col] + ([hue_col] if hue_col else [])
+        plot_df = df[cols].copy()
+        plot_df[x_col] = pd.to_numeric(plot_df[x_col], errors="coerce")
+        plot_df[y_col] = pd.to_numeric(plot_df[y_col], errors="coerce")
+        plot_df = plot_df.dropna(subset=[x_col, y_col])
+
+        if config["builder_log_x"]:
+            plot_df = plot_df[plot_df[x_col] > 0]
+        if config["builder_log_y"]:
+            plot_df = plot_df[plot_df[y_col] > 0]
+
+        if plot_df.empty:
+            raise ValueError("No quedaron datos validos para graficar con esos filtros.")
+
+        return plot_df.reset_index(drop=True)
+
+
+    def _draw_visual_builder(self, plot_df, config):
+        fig = self.visual_builder_figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        self.visual_builder_ax = ax
+
+        x_col = config["x_col"]
+        y_col = config["y_col"]
+        hue_col = config["hue_col"]
+        has_hue = bool(hue_col and hue_col in plot_df.columns)
+
+        if config["layer_density"]:
+            hb = ax.hexbin(
+                plot_df[x_col],
+                plot_df[y_col],
+                gridsize=32,
+                mincnt=1,
+                cmap="Blues",
+                alpha=0.28,
+                linewidths=0,
+            )
+            fig.colorbar(hb, ax=ax, label="Densidad")
+
+        if has_hue:
+            groups = list(plot_df.groupby(hue_col, dropna=False))
+            colors = plt.cm.tab10(np.linspace(0, 1, max(len(groups), 1)))
+        else:
+            groups = [("Datos", plot_df)]
+            colors = ["#2f6f9f"]
+
+        for idx, (group_name, subset) in enumerate(groups):
+            subset = subset.sort_values(x_col)
+            color = colors[idx % len(colors)]
+            label = str(group_name)
+
+            if config["layer_scatter"]:
+                ax.scatter(
+                    subset[x_col],
+                    subset[y_col],
+                    s=config["point_size"],
+                    alpha=config["point_alpha"],
+                    label=label,
+                    color=color,
+                    edgecolors="white",
+                    linewidths=0.35,
+                )
+
+            if config["layer_line"] and len(subset) >= 2:
+                ax.plot(
+                    subset[x_col],
+                    subset[y_col],
+                    color=color,
+                    alpha=0.65,
+                    linewidth=1.2,
+                    label=f"{label} linea" if not config["layer_scatter"] else None,
+                )
+
+            if config["layer_trend"] and len(subset) >= 3 and subset[x_col].nunique() >= 2:
+                try:
+                    coef = np.polyfit(subset[x_col].to_numpy(dtype=float), subset[y_col].to_numpy(dtype=float), 1)
+                    x_line = np.linspace(float(subset[x_col].min()), float(subset[x_col].max()), 120)
+                    y_line = coef[0] * x_line + coef[1]
+                    ax.plot(
+                        x_line,
+                        y_line,
+                        color=color,
+                        linestyle="--",
+                        linewidth=2.0,
+                        alpha=0.9,
+                        label=f"{label} tendencia",
+                    )
+                except Exception:
+                    pass
+
+            if config["layer_centroids"]:
+                cx = float(subset[x_col].mean())
+                cy = float(subset[y_col].mean())
+                ax.scatter(
+                    [cx],
+                    [cy],
+                    marker="X",
+                    s=max(config["point_size"] * 3, 90),
+                    color=color,
+                    edgecolors="black",
+                    linewidths=0.8,
+                    label=f"{label} centroide",
+                    zorder=5,
+                )
+                if has_hue:
+                    ax.annotate(str(group_name), (cx, cy), textcoords="offset points", xytext=(6, 6), fontsize=8)
+
+        if config["builder_log_x"]:
+            ax.set_xscale("log")
+        if config["builder_log_y"]:
+            ax.set_yscale("log")
+
+        ax.set_xlabel(x_col)
+        ax.set_ylabel(y_col)
+        ax.set_title(f"{config['df_name']} | {x_col} vs {y_col}")
+        ax.grid(True, alpha=0.25)
+
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize=8, loc="best")
+
+        fig.tight_layout()
+        self.visual_builder_canvas.draw()
+
+
+    def update_visual_builder(self):
+        try:
+            config = self._collect_visual_builder_config()
+            plot_df = self._prepare_visual_builder_data(config)
+            self._draw_visual_builder(plot_df, config)
+            self.visual_builder_current_data = plot_df
+            self.visual_builder_current_config = config
+            self.status_var.set(f"Constructor actualizado: {len(plot_df)} filas")
+            self._log(f"Constructor visual actualizado: {config['df_name']} | {config['x_col']} vs {config['y_col']} | filas={len(plot_df)}")
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo construir la grafica:\n{exc}")
+            self._log(f"Error en constructor visual: {exc}")
+
+
+    def save_visual_builder_output(self):
+        if self.visual_builder_current_data is None or self.visual_builder_current_config is None:
+            self.update_visual_builder()
+
+        if self.visual_builder_current_data is None or self.visual_builder_current_config is None:
+            return
+
+        try:
+            output_root = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR).expanduser()
+            output_root.mkdir(parents=True, exist_ok=True)
+            stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_dir = output_root / f"{stamp}_visual_builder"
+            tables_dir = run_dir / "tables"
+            figures_dir = run_dir / "figures"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            table_path = tables_dir / "visual_builder_data.csv"
+            figure_path = figures_dir / "visual_builder.png"
+            self.visual_builder_current_data.to_csv(table_path, index=False, encoding="utf-8-sig")
+            self.visual_builder_figure.savefig(figure_path, dpi=180, bbox_inches="tight")
+
+            manifest = {
+                "tables": [{
+                    "name": "visual_builder_data",
+                    "path": str(table_path),
+                    "rows": int(self.visual_builder_current_data.shape[0]),
+                    "columns": int(self.visual_builder_current_data.shape[1]),
+                }],
+                "arrays": [],
+                "objects": [],
+                "html": [],
+                "figures": [str(figure_path)],
+                "analysis": "visual_builder",
+                "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
+                "parameters": json_safe(self.visual_builder_current_config),
+            }
+
+            with (run_dir / "manifest.json").open("w", encoding="utf-8") as fh:
+                json.dump(manifest, fh, ensure_ascii=False, indent=2)
+
+            key = self._register_result_manifest(
+                manifest=manifest,
+                run_dir=run_dir,
+                result={"visual_builder_data": self.visual_builder_current_data},
+                manifest_path=run_dir / "manifest.json",
+                select=True,
+            )
+            self.last_run_dir = run_dir
+            self._log(f"Constructor visual guardado: {run_dir}")
+            self.status_var.set(f"Constructor guardado: {key}")
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo guardar el constructor:\n{exc}")
+            self._log(f"Error guardando constructor visual: {exc}")
+
+
+    def _set_assistant_text(self, text):
+        self.assistant_response_text.configure(state="normal")
+        self.assistant_response_text.delete("1.0", "end")
+        self.assistant_response_text.insert("1.0", str(text))
+        self.assistant_response_text.configure(state="disabled")
+
+
+    def _append_assistant_text(self, text):
+        self.assistant_response_text.configure(state="normal")
+        self.assistant_response_text.insert("end", "\n\n" + str(text))
+        self.assistant_response_text.see("end")
+        self.assistant_response_text.configure(state="disabled")
+
+
+    def _assistant_question_mentions_results(self, question):
+        normalized = unicodedata.normalize("NFKD", str(question).lower())
+        q = "".join(char for char in normalized if not unicodedata.combining(char))
+        return any(
+            word in q
+            for word in [
+                "resultado",
+                "resultados",
+                "salio",
+                "salieron",
+                "interpreta",
+                "interpretar",
+                "conclusion",
+                "conclusiones",
+                "reporte",
+            ]
+        )
+
+
+    def _assistant_results_response(self, question):
+        key = self.active_result_key
+        if not key and self.result_manifests:
+            key = next(reversed(self.result_manifests))
+
+        if not key:
+            return AssistantResponse(
+                text=(
+                    "Todavia no hay resultados cargados o ejecutados. "
+                    "Primero corre un analisis o usa 'Cargar corrida'. Despues puedo revisar tablas, figuras, "
+                    "parametros y senalar que mirar."
+                ),
+                target_analysis="results",
+                warnings=["No hay corridas disponibles."],
+            )
+
+        manifest = self.result_manifests.get(key, {})
+        run_dir = self.result_run_dirs.get(key)
+        analysis = manifest.get("analysis", "resultado")
+        tables = manifest.get("tables", []) or []
+        figures = manifest.get("figures", []) or []
+        html = manifest.get("html", []) or []
+        params = manifest.get("parameters", {}) or {}
+
+        lines = [
+            f"Estoy revisando la corrida activa: {key}.",
+            f"Tipo de analisis: {analysis}. Tiene {len(tables)} tabla(s), {len(figures)} figura(s) y {len(html)} HTML interactivo(s).",
+        ]
+
+        if params:
+            priority = [
+                "df_name", "data_df_name", "group_df_name", "value_df_name", "group_col",
+                "value_cols", "numeric_cols", "feature_cols", "alpha", "eps", "min_samples",
+                "transform_method", "embedding_method",
+            ]
+            shown = []
+            for name in priority:
+                if name in params and params[name] not in (None, "", []):
+                    shown.append(f"{name}={params[name]}")
+            if shown:
+                lines.append("Parametros clave: " + "; ".join(shown[:8]) + ".")
+
+        table_notes = self._assistant_table_result_notes(tables, run_dir)
+        if table_notes:
+            lines.append("Lectura rapida de tablas:\n" + "\n".join(table_notes))
+        elif tables:
+            lines.append("Hay tablas guardadas, pero no encontre columnas de p-valores o metricas faciles de resumir automaticamente.")
+
+        if html:
+            names = [str(item.get("name", "HTML")) for item in html[:3]]
+            lines.append("Para explorar visualmente, abre los HTML interactivos desde Resultados: " + ", ".join(names) + ".")
+        elif figures:
+            lines.append("Revisa las figuras en la pestana Resultados; si quieres compararlas con capas, recrealas desde Visualizaciones.")
+
+        lines.append("Si quieres, preguntame algo mas concreto como 'que significa este p-valor', 'que cluster parece mejor' o 'que grafica conviene mostrar'.")
+        return AssistantResponse(
+            text="\n".join(lines),
+            target_analysis="results",
+            context={"result_key": key, "analysis": analysis},
+        )
+
+
+    def _assistant_table_result_notes(self, tables, run_dir):
+        notes = []
+
+        def resolve(path_text):
+            path = Path(path_text)
+            if path.is_absolute() or path.exists():
+                return path
+            if run_dir:
+                return Path(run_dir) / path
+            return path
+
+        for table in tables[:8]:
+            path = resolve(table.get("path", ""))
+            if not path.exists() or path.suffix.lower() != ".csv":
+                continue
+            try:
+                df = pd.read_csv(path, nrows=1000)
+            except Exception:
+                continue
+            lower_cols = {str(col).lower(): col for col in df.columns}
+            p_cols = [
+                col for low, col in lower_cols.items()
+                if low in {"p", "p_value", "pvalue", "p_val", "p_adj", "p_adjusted", "q_value"}
+                or "p_value" in low
+                or "fdr" in low
+                or "bonferroni" in low
+            ]
+            metric_cols = [
+                col for low, col in lower_cols.items()
+                if low in {"silhouette", "calinski_harabasz", "davies_bouldin", "ari", "ami"}
+                or "silhouette" in low
+                or "davies" in low
+                or "calinski" in low
+            ]
+            table_name = table.get("name") or path.stem
+            for col in p_cols[:2]:
+                values = pd.to_numeric(df[col], errors="coerce").dropna()
+                if values.empty:
+                    continue
+                significant = int((values < 0.05).sum())
+                notes.append(
+                    f"- {table_name}: {significant} de {len(values)} pruebas tienen {col} < 0.05; minimo observado {values.min():.4g}."
+                )
+            for col in metric_cols[:2]:
+                values = pd.to_numeric(df[col], errors="coerce").dropna()
+                if values.empty:
+                    continue
+                notes.append(
+                    f"- {table_name}: {col} va de {values.min():.4g} a {values.max():.4g}; revisa filas con mejor valor antes de decidir."
+                )
+            if len(notes) >= 6:
+                break
+        return notes[:6]
+
+
+    def ask_assistant(self):
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo(APP_TITLE, "Ya hay un analisis en ejecucion. Espera a que termine.")
+            return
+        question = self.assistant_question_text.get("1.0", "end").strip()
+        if not question:
+            messagebox.showinfo(APP_TITLE, "Escribe una pregunta para el asistente.")
+            return
+
+        self.assistant_engine.update_dfs(self.dfs)
+        selected = self.inputs.get("assistant", {}).get("assistant_dataset", tk.StringVar()).get().strip() or None
+        use_ollama = bool(self.inputs.get("assistant", {}).get("assistant_use_ollama", tk.BooleanVar()).get())
+        model = self.inputs.get("assistant", {}).get("assistant_model", tk.StringVar(value="qwen2.5:3b")).get().strip() or "qwen2.5:3b"
+        self._set_assistant_text("Pensando sobre tus datos y parametros...")
+        self.status_var.set("Asistente pensando...")
+        mode = "results" if self._assistant_question_mentions_results(question) else "question"
+        thread = threading.Thread(
+            target=self._assistant_worker,
+            args=(mode, question, selected, use_ollama, model),
+            daemon=True,
+        )
+        thread.start()
+
+
+    def ask_assistant_dataset_summary(self):
+        self.assistant_engine.update_dfs(self.dfs)
+        self._set_assistant_text("Revisando datasets cargados...")
+        self.status_var.set("Asistente revisando datasets...")
+        thread = threading.Thread(
+            target=self._assistant_worker,
+            args=("summary", "", None, False, ""),
+            daemon=True,
+        )
+        thread.start()
+
+
+    def _assistant_worker(self, mode, question, selected, use_ollama, model):
+        try:
+            if mode == "summary":
+                response = self.assistant_engine.analyze_datasets()
+            elif mode == "results":
+                response = self._assistant_results_response(question)
+            else:
+                response = self.assistant_engine.answer(
+                    question,
+                    selected_dataset=selected,
+                    use_ollama=use_ollama,
+                    model=model,
+                )
+            self.msg_queue.put(("assistant_done", response))
+        except Exception:
+            self.msg_queue.put(("assistant_error", traceback.format_exc()))
+
+
+    def _render_assistant_response(self, response):
+        self.assistant_last_response = response
+        self.assistant_suggestion_payload = response.suggestions or {}
+
+        parts = [response.text]
+        if response.warnings:
+            parts.append("Avisos:\n" + "\n".join(f"- {item}" for item in response.warnings))
+        if response.suggestions:
+            parts.append("Parametros sugeridos:\n" + json.dumps(response.suggestions, ensure_ascii=False, indent=2))
+        else:
+            parts.append("No hay parametros automaticos para aplicar todavia.")
+
+        self._set_assistant_text("\n\n".join(parts))
+        self.status_var.set("Asistente listo")
+
+
+    def apply_assistant_suggestions(self):
+        suggestions = self.assistant_suggestion_payload or {}
+        if not suggestions:
+            messagebox.showinfo(APP_TITLE, "Todavia no hay sugerencias para aplicar.")
+            return
+
+        applied_groups = []
+        for group, params in suggestions.items():
+            if group not in self.inputs:
+                continue
+            applied = 0
+            for key, value in params.items():
+                var = self.inputs[group].get(key)
+                if var is None:
+                    continue
+                if isinstance(var, tk.BooleanVar):
+                    var.set(bool(value))
+                else:
+                    if isinstance(value, (list, tuple)):
+                        value = ", ".join(map(str, value))
+                    var.set("" if value is None else str(value))
+                applied += 1
+            if applied:
+                applied_groups.append(group)
+
+        self.refresh_columns()
+        if applied_groups:
+            self._select_analysis_tab(applied_groups[0])
+            self._append_assistant_text(
+                "Aplique sugerencias en: " + ", ".join(applied_groups) + ". Revisa los campos antes de ejecutar."
+            )
+            self._log("Asistente aplico parametros en: " + ", ".join(applied_groups))
+        else:
+            messagebox.showinfo(APP_TITLE, "Las sugerencias no coinciden con campos editables de la interfaz.")
+
+
+    def _select_analysis_tab(self, analysis):
+        labels = {
+            "assistant": "Asistente",
+            "exploration": "Exploracion",
+            "characterization": "Caracterizacion",
+            "normality": "Normalidad",
+            "correlation": "Correlacion",
+            "visualization": "Visualizaciones",
+            "kde": "KDE",
+            "kruskal": "Kruskal-Wallis",
+            "mann_whitney": "Mann-Whitney",
+            "dimensionality": "Reduccion",
+            "dbscan": "DBSCAN",
+            "cluster_review": "Revision clusters",
+            "results": "Resultados",
+        }
+        target_label = labels.get(analysis)
+        if not target_label:
+            return
+        for i in range(self.notebook.index("end")):
+            if self.notebook.tab(i, "text") == target_label:
+                self.notebook.select(i)
+                return
+
+
 
     def load_files(self):
         paths = filedialog.askopenfilenames(
@@ -1946,6 +3222,8 @@ class MicrobiotaGUI(tk.Tk):
 
 
     def refresh_datasets(self):
+        self.assistant_engine.update_dfs(self.dfs)
+
         for item in self.dataset_tree.get_children():
             self.dataset_tree.delete(item)
 
@@ -2210,6 +3488,19 @@ class MicrobiotaGUI(tk.Tk):
                     text=path.name
                 )
 
+            for i, html_item in enumerate(manifest.get("html", []), start=1):
+                html_path = html_item.get("path", html_item) if isinstance(html_item, dict) else html_item
+                iid = f"{key}_html_{i}"
+                path = self._artifact_path(html_path)
+                self.visible_figures[iid] = path
+
+                self.figure_list.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    text=f"HTML: {path.name}"
+                )
+
             table_items = self.table_list.get_children()
             figure_items = self.figure_list.get_children()
 
@@ -2424,6 +3715,20 @@ class MicrobiotaGUI(tk.Tk):
             self.clear_figure_preview(f"No existe la figura: {path}")
             return
 
+        if path.suffix.lower() in {".html", ".htm"}:
+            self.figure_canvas.create_text(
+                24,
+                24,
+                anchor="nw",
+                text="Archivo interactivo HTML.\nUsa 'Abrir seleccionado' para verlo en el navegador.",
+                fill="#20242a",
+                font=("Segoe UI", 12)
+            )
+            self.figure_canvas.configure(scrollregion=(0, 0, 640, 140))
+            self.figure_info_var.set(f"{path.name} | {path}")
+            self.preview_notebook.select(1)
+            return
+
         try:
             if HAS_PIL:
                 image = Image.open(path)
@@ -2555,6 +3860,14 @@ class MicrobiotaGUI(tk.Tk):
     def _collect_params(self, analysis):
         values = {key: var.get() for key, var in self.inputs[analysis].items()}
 
+        if analysis == "exploration":
+            return {
+                "df_name": values["df_name"],
+                "numeric_cols": split_list(values["numeric_cols"]),
+                "max_category_values": int(values["max_category_values"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
         if analysis == "characterization":
             return {
                 "df_name": values["df_name"],
@@ -2573,6 +3886,32 @@ class MicrobiotaGUI(tk.Tk):
                 "value_mode": values["value_mode"],
                 "test_method": values["test_method"],
                 "alpha": float(values["alpha"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
+        if analysis == "correlation":
+            return {
+                "df_name": values["df_name"],
+                "numeric_cols": split_list(values["numeric_cols"]),
+                "alpha": float(values["alpha"]),
+                "min_non_null": int(values["min_non_null"]),
+                "max_plot_vars": int(values["max_plot_vars"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
+        if analysis == "visualization":
+            return {
+                "df_name": values["df_name"],
+                "x_col": values["x_col"].strip() or None,
+                "y_col": values["y_col"].strip() or None,
+                "hue_col": values["hue_col"].strip() or None,
+                "group_col": values["group_col"].strip() or None,
+                "violin_cols": split_list(values["violin_cols"]),
+                "rank_abundance": parse_bool(values["rank_abundance"]),
+                "abundance_cols": split_list(values["abundance_cols"]),
+                "abundance_id_col": values["abundance_id_col"].strip() or "ID",
+                "top_n": parse_optional_int(values["top_n"]),
+                "log_scale": parse_bool(values["log_scale"]),
                 "verbose": parse_bool(values["verbose"]),
             }
 
@@ -2620,6 +3959,29 @@ class MicrobiotaGUI(tk.Tk):
                 "verbose": parse_bool(values["verbose"]),
             }
 
+        if analysis == "dimensionality":
+            return {
+                "data_df_name": values["data_df_name"],
+                "id_col": values["id_col"].strip() or None,
+                "feature_cols": split_list(values["feature_cols"]),
+                "missing_strategy": values["missing_strategy"],
+                "remove_zero_rows": parse_bool(values["remove_zero_rows"]),
+                "min_prevalence": parse_optional_float(values["min_prevalence"]),
+                "min_total_abundance": parse_optional_float(values["min_total_abundance"]),
+                "transform_method": values["transform_method"],
+                "pseudocount": float(values["pseudocount"]),
+                "scale": parse_bool(values["scale"]),
+                "embedding_method": values["embedding_method"],
+                "n_components": int(values["n_components"]),
+                "random_state": int(values["random_state"]),
+                "embedding_kwargs": parse_json_dict(values["embedding_kwargs"]),
+                "variance_thresholds": parse_float_tuple(
+                    values["variance_thresholds"],
+                    default=(0.8, 0.9, 0.95)
+                ),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
         if analysis == "dbscan":
             meta_df_name = values["meta_df_name"].strip() or None
             return {
@@ -2652,22 +4014,46 @@ class MicrobiotaGUI(tk.Tk):
                 "verbose": parse_bool(values["verbose"]),
             }
 
+        if analysis == "cluster_review":
+            label_col = values["label_col"].strip()
+            if not label_col:
+                raise ValueError("Selecciona una columna de cluster.")
+            return {
+                "df_name": values["df_name"],
+                "label_col": label_col,
+                "feature_cols": split_list(values["feature_cols"]),
+                "ignore_noise": parse_bool(values["ignore_noise"]),
+                "noise_label": values["noise_label"].strip() or "-1",
+                "min_cluster_size": int(values["min_cluster_size"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
         raise ValueError(f"Analisis desconocido: {analysis}")
 
 
     def _execute(self, analysis, params):
+        if analysis == "exploration":
+            return dataset_profile_from_loaded(dfs=self.dfs, **params)
         if analysis == "characterization":
             return distribution_plots_from_loaded(dfs=self.dfs, **params)
         if analysis == "normality":
             return normality_tests_from_loaded(dfs=self.dfs, **params)
+        if analysis == "correlation":
+            return correlation_from_loaded(dfs=self.dfs, **params)
+        if analysis == "visualization":
+            return visualization_from_loaded(dfs=self.dfs, **params)
         if analysis == "kde":
             return kde_from_loaded(dfs=self.dfs, **params)
         if analysis == "kruskal":
             return kruskal_wallis_from_loaded(dfs=self.dfs, **params)
         if analysis == "mann_whitney":
             return mann_whitney_from_loaded(dfs=self.dfs, **params)
+        if analysis == "dimensionality":
+            return dimensionality_from_loaded(dfs=self.dfs, **params)
         if analysis == "dbscan":
             return dbscan_from_loaded(dfs=self.dfs, **params)
+        if analysis == "cluster_review":
+            return cluster_review_from_loaded(dfs=self.dfs, **params)
         raise ValueError(f"Analisis desconocido: {analysis}")
 
 
@@ -2690,13 +4076,27 @@ class MicrobiotaGUI(tk.Tk):
                         self._log(log_text.rstrip())
                     self._log(f"Terminado: {analysis}")
                     self._log(f"Salida: {run_dir}")
-                    self._log(f"Tablas: {len(manifest.get('tables', []))} | Arrays: {len(manifest.get('arrays', []))} | Figuras: {len(manifest.get('figures', []))}")
+                    self._log(
+                        f"Tablas: {len(manifest.get('tables', []))} | "
+                        f"Arrays: {len(manifest.get('arrays', []))} | "
+                        f"Figuras: {len(manifest.get('figures', []))} | "
+                        f"HTML: {len(manifest.get('html', []))}"
+                    )
                     self.status_var.set(f"Listo. Ultima salida: {run_dir}")
                 elif kind == "error":
                     _, analysis, trace = message
                     self._log(f"Error en {analysis}:\n{trace}")
                     self.status_var.set(f"Error en {analysis}")
                     messagebox.showerror(APP_TITLE, f"El analisis fallo. Revisa el log.\n\n{trace.splitlines()[-1]}")
+                elif kind == "assistant_done":
+                    _, response = message
+                    self._render_assistant_response(response)
+                    self._log("Asistente genero una recomendacion.")
+                elif kind == "assistant_error":
+                    _, trace = message
+                    self._set_assistant_text(f"El asistente fallo. Revisa el detalle:\n\n{trace}")
+                    self._log(f"Error en asistente:\n{trace}")
+                    self.status_var.set("Error en asistente")
         except queue.Empty:
             pass
         self.after(150, self._poll_queue)
