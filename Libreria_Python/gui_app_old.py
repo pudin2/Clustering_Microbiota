@@ -8,10 +8,9 @@ import re
 import threading
 import traceback
 import unicodedata
-import webbrowser
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import matplotlib
 
@@ -42,20 +41,7 @@ from modules.exploration import (
     dataset_profile_from_loaded,
     dimensionality_from_loaded,
 )
-from modules.visualizations import (
-    Debouncer,
-    InteractiveController,
-    PresetStore,
-    ViewHistory,
-    VisualizationConfig,
-    build_visualization,
-    dataset_from_selection,
-    export_plot_result,
-    infer_filter_specs,
-    recommend_visualizations,
-    suggest_analysis_routes,
-    visualization_from_loaded,
-)
+from modules.visualizations import visualization_from_loaded
 from modules.smart_assistant import AssistantResponse, OpenAssistantEngine
 
 
@@ -162,33 +148,6 @@ HELP_TEXTS = {
     "point_alpha": "Opacidad de puntos entre 0 y 1.",
     "point_size": "Tamano de los puntos en la grafica.",
     "verbose": "Escribe detalles de la ejecucion en el log lateral.",
-    "plot_type": "Selecciona el tipo de gráfico. Automático elige una opción según X/Y y sus tipos.",
-    "facet_col": "Divide la visualización en paneles por los valores de esta columna.",
-    "builder_id_col": "Identificador del registro; se muestra en hover e inspector cuando está disponible.",
-    "hover_cols": "Columnas extra que aparecerán al pasar el mouse por un punto. Sepáralas por coma.",
-    "heatmap_cols": "Variables numéricas incluidas en el mapa de correlaciones.",
-    "builder_title": "Título opcional para la visualización actual.",
-    "max_facets": "Número máximo de paneles cuando usas Dividir por.",
-    "builder_bins": "Número de bins para histogramas.",
-    "auto_update": "Actualiza automáticamente la vista unos milisegundos después de cambiar un control.",
-    "show_stats": "Calcula y muestra estadísticas asociadas al gráfico actual.",
-    "abundance_group_col": "Genera una curva de rank-abundancia independiente por cada grupo.",
-    "rank_show_cumulative": "Añade la abundancia acumulada a la visualización rank-abundancia.",
-    "rank_highlight_top": "Cantidad de features superiores que se resaltan en rank-abundancia.",
-    "rank_search": "Filtra rank-abundancia por texto contenido en el nombre de la feature.",
-    "hover_enabled": "Activa tooltips al mover el mouse sobre puntos del gráfico.",
-    "inspector_enabled": "Al hacer clic sobre un punto muestra el registro completo en el inspector.",
-    "selection_mode": "Permite seleccionar observaciones con lazo o rectángulo para crear subconjuntos.",
-    "legend_toggle": "Permite hacer clic en la leyenda para ocultar o volver a mostrar series.",
-    "__button__.Recomendar vistas": "Analiza el dataset y propone gráficos útiles que puedes aplicar con un clic.",
-    "__button__.Guardar preset": "Guarda la configuración actual del constructor para reutilizarla después.",
-    "__button__.Cargar preset": "Recupera una configuración de visualización guardada anteriormente.",
-    "__button__.Deshacer": "Vuelve a la configuración anterior del constructor visual.",
-    "__button__.Rehacer": "Restaura una configuración que acabas de deshacer.",
-    "__button__.Reset vista": "Restaura los límites originales de zoom y desplazamiento del gráfico.",
-    "__button__.Abrir HTML": "Abre la versión Plotly interactiva en el navegador cuando está disponible.",
-    "__button__.Crear dataset selección": "Crea un nuevo dataset en memoria con las observaciones seleccionadas en el gráfico.",
-    "__button__.Exportar todo": "Exporta PNG, SVG, PDF, CSV, XLSX y HTML interactivo de la vista actual.",
 }
 
 
@@ -603,23 +562,6 @@ class MicrobiotaGUI(tk.Tk):
         self.assistant_engine = OpenAssistantEngine(self.dfs)
         self.assistant_last_response = None
         self.assistant_suggestion_payload = None
-
-        # Estado del constructor visual V2
-        self.visual_builder_result = None
-        self.visual_builder_current_data = None
-        self.visual_builder_current_config = None
-        self.visual_builder_interaction = None
-        self.visual_builder_selected_indices = []
-        self.visual_builder_selected_df = None
-        self.visual_builder_history = ViewHistory(max_items=100)
-        self.visual_builder_presets = PresetStore()
-        self.visual_builder_presets_loaded = False
-        self.visual_builder_debouncer = Debouncer(self.after, self.after_cancel, delay_ms=400)
-        self.visual_builder_applying_state = False
-        self.visual_filter_rows = {}
-        self.visual_filter_specs = {}
-        self.visual_filter_dataset_name = None
-        self.visual_recommendations = []
 
         self._configure_style()
         self._build_ui()
@@ -1798,12 +1740,9 @@ class MicrobiotaGUI(tk.Tk):
         group = "visualization"
         tab = self._new_tab("Visualizaciones")
 
-        # ------------------------------------------------------------------
-        # 1) Configuración principal
-        # ------------------------------------------------------------------
-        config_box = self._section(tab, "Constructor visual V2", 0)
+        joint_box = self._section(tab, "Variables conjuntas", 0)
         self._add_combo(
-            config_box,
+            joint_box,
             group,
             "df_name",
             "Dataset",
@@ -1811,88 +1750,28 @@ class MicrobiotaGUI(tk.Tk):
             "",
             0,
             0,
-            dataset_combo=True,
+            dataset_combo=True
         )
-        self._add_combo(
-            config_box,
-            group,
-            "plot_type",
-            "Tipo de gráfico",
-            [
-                "Automático",
-                "Dispersión",
-                "Línea",
-                "Barras",
-                "Histograma",
-                "Boxplot",
-                "Violín",
-                "Densidad",
-                "Heatmap",
-                "Rank-abundancia",
-            ],
-            "Automático",
-            0,
-            2,
-        )
-        self._add_combo(config_box, group, "x_col", "X", [], "", 1, 0, column_for=(group, "df_name"))
-        self._add_combo(config_box, group, "y_col", "Y", [], "", 1, 2, column_for=(group, "df_name"))
-        self._add_combo(config_box, group, "hue_col", "Color", [], "", 2, 0, column_for=(group, "df_name"))
-        self._add_combo(config_box, group, "facet_col", "Dividir por", [], "", 2, 2, column_for=(group, "df_name"))
-        self._add_combo(config_box, group, "builder_id_col", "ID / registro", [], "", 3, 0, column_for=(group, "df_name"))
-        self._add_entry(config_box, group, "hover_cols", "Hover extra", "", 3, 2, width=34)
-        self._add_entry(config_box, group, "builder_title", "Título", "", 4, 0, width=34)
+        self._add_combo(joint_box, group, "x_col", "X", [], "", 1, 0, column_for=("visualization", "df_name"))
+        self._add_combo(joint_box, group, "y_col", "Y", [], "", 1, 2, column_for=("visualization", "df_name"))
+        self._add_combo(joint_box, group, "hue_col", "Color", [], "", 2, 0, column_for=("visualization", "df_name"))
+
+        violin_box = self._section(tab, "Violines", 1)
+        self._add_combo(violin_box, group, "group_col", "Grupo", [], "", 0, 0, column_for=("visualization", "df_name"))
         self._add_numeric_columns_dropdown(
-            config_box,
+            violin_box,
             group,
-            "heatmap_cols",
-            "Variables heatmap",
+            "violin_cols",
+            "Variables",
             dataset_key="df_name",
-            row=4,
-            col=2,
-            width=34,
+            row=1,
+            col=0,
+            width=42
         )
-        self._add_entry(config_box, group, "max_facets", "Máx. paneles", "12", 5, 0)
-        self._add_entry(config_box, group, "builder_bins", "Bins histograma", "30", 5, 2)
-        self._add_check(config_box, group, "auto_update", "Actualización automática", True, 6, 0)
-        self._add_check(config_box, group, "show_stats", "Mostrar estadísticas", True, 6, 2)
 
-        # ------------------------------------------------------------------
-        # 2) Filtros dinámicos
-        # ------------------------------------------------------------------
-        filter_box = self._section(tab, "Filtros interactivos", 1)
-        filter_controls = ttk.Frame(filter_box)
-        filter_controls.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 8))
-        filter_controls.grid_columnconfigure(0, weight=1)
-
-        self.visual_filter_column_var = tk.StringVar(value="")
-        self.visual_filter_column_combo = ttk.Combobox(
-            filter_controls,
-            textvariable=self.visual_filter_column_var,
-            values=[],
-            state="readonly",
-            width=38,
-        )
-        self.visual_filter_column_combo.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Button(filter_controls, text="Agregar filtro", command=self.add_visual_filter).grid(row=0, column=1, padx=(0, 6))
-        ttk.Button(filter_controls, text="Limpiar filtros", command=self.clear_visual_filters).grid(row=0, column=2)
-
-        self.visual_filters_container = ttk.Frame(filter_box)
-        self.visual_filters_container.grid(row=1, column=0, columnspan=4, sticky="ew")
-        self.visual_filters_container.grid_columnconfigure(0, weight=1)
-        self.visual_filters_empty_var = tk.StringVar(value="Selecciona una columna y pulsa Agregar filtro.")
-        ttk.Label(
-            self.visual_filters_container,
-            textvariable=self.visual_filters_empty_var,
-            style="Subtle.TLabel",
-        ).grid(row=0, column=0, sticky="w")
-
-        # ------------------------------------------------------------------
-        # 3) Rank-abundancia avanzado
-        # ------------------------------------------------------------------
-        rank_box = self._section(tab, "Rank-abundancia avanzado", 2)
-        self._add_check(rank_box, group, "rank_abundance", "Modo rank-abundancia", False, 0, 0)
-        self._add_combo(rank_box, group, "abundance_id_col", "ID", [], "", 0, 2, column_for=(group, "df_name"))
-        self._add_combo(rank_box, group, "abundance_group_col", "Agrupar por", [], "", 1, 0, column_for=(group, "df_name"))
+        rank_box = self._section(tab, "Rank-abundancia", 2)
+        self._add_check(rank_box, group, "rank_abundance", "Generar rank-abundancia", False, 0, 0)
+        self._add_combo(rank_box, group, "abundance_id_col", "ID", [], "", 0, 2, column_for=("visualization", "df_name"))
         self._add_numeric_columns_dropdown(
             rank_box,
             group,
@@ -1900,178 +1779,89 @@ class MicrobiotaGUI(tk.Tk):
             "Columnas abundancia",
             dataset_key="df_name",
             row=1,
-            col=2,
-            width=34,
+            col=0,
+            width=42
         )
-        self._add_entry(rank_box, group, "top_n", "Top N", "2000", 2, 0)
-        self._add_check(rank_box, group, "log_scale", "Escala log", True, 2, 2)
-        self._add_check(rank_box, group, "rank_show_cumulative", "Mostrar acumulado", False, 3, 0)
-        self._add_entry(rank_box, group, "rank_highlight_top", "Resaltar Top", "10", 3, 2)
-        self._add_entry(rank_box, group, "rank_search", "Buscar feature", "", 4, 0, width=34)
-        self._add_check(rank_box, group, "verbose", "Mostrar resumen en log", True, 4, 2)
+        self._add_entry(rank_box, group, "top_n", "Top N", "2000", 1, 2)
+        self._add_check(rank_box, group, "log_scale", "Escala log", True, 2, 0)
+        self._add_check(rank_box, group, "verbose", "Mostrar resumen en log", True, 2, 2)
 
-        # ------------------------------------------------------------------
-        # 4) Capas y estilo
-        # ------------------------------------------------------------------
-        style_box = self._section(tab, "Capas y estilo", 3)
-        self._add_check(style_box, group, "layer_scatter", "Puntos", True, 0, 0)
-        self._add_check(style_box, group, "layer_line", "Línea", False, 0, 2)
-        self._add_check(style_box, group, "layer_trend", "Tendencia", True, 1, 0)
-        self._add_check(style_box, group, "layer_density", "Densidad", False, 1, 2)
-        self._add_check(style_box, group, "layer_centroids", "Centroides", False, 2, 0)
-        self._add_check(style_box, group, "builder_log_x", "Log X", False, 2, 2)
-        self._add_check(style_box, group, "builder_log_y", "Log Y", False, 3, 0)
+        builder_box = self._section(tab, "Constructor visual", 3)
+        self._add_check(builder_box, group, "layer_scatter", "Puntos", True, 0, 0)
+        self._add_check(builder_box, group, "layer_line", "Linea", False, 0, 2)
+        self._add_check(builder_box, group, "layer_trend", "Tendencia", True, 1, 0)
+        self._add_check(builder_box, group, "layer_density", "Densidad", False, 1, 2)
+        self._add_check(builder_box, group, "layer_centroids", "Centroides", True, 2, 0)
+        self._add_check(builder_box, group, "builder_log_x", "Log X", False, 2, 2)
+        self._add_check(builder_box, group, "builder_log_y", "Log Y", False, 3, 0)
+        self._add_entry(builder_box, group, "point_alpha", "Opacidad", "0.75", 3, 2)
+        self._add_entry(builder_box, group, "point_size", "Tamano puntos", "34", 4, 0)
 
-        self._add_label_with_help(style_box, group, "point_alpha", "Opacidad", 3, 2)
-        alpha_var = tk.DoubleVar(value=0.75)
-        alpha_frame = ttk.Frame(style_box)
-        alpha_frame.grid(row=3, column=3, sticky="ew", pady=4, padx=(0, 16))
-        alpha_frame.grid_columnconfigure(0, weight=1)
-        alpha_scale = ttk.Scale(alpha_frame, from_=0.05, to=1.0, variable=alpha_var, orient="horizontal")
-        alpha_scale.grid(row=0, column=0, sticky="ew")
-        self.visual_alpha_value_var = tk.StringVar(value="0.75")
-        ttk.Label(alpha_frame, textvariable=self.visual_alpha_value_var, width=6).grid(row=0, column=1, padx=(8, 0))
-        self.inputs.setdefault(group, {})["point_alpha"] = alpha_var
-
-        self._add_label_with_help(style_box, group, "point_size", "Tamaño puntos", 4, 0)
-        size_var = tk.DoubleVar(value=34.0)
-        size_frame = ttk.Frame(style_box)
-        size_frame.grid(row=4, column=1, sticky="ew", pady=4, padx=(0, 16))
-        size_frame.grid_columnconfigure(0, weight=1)
-        size_scale = ttk.Scale(size_frame, from_=4, to=200, variable=size_var, orient="horizontal")
-        size_scale.grid(row=0, column=0, sticky="ew")
-        self.visual_size_value_var = tk.StringVar(value="34")
-        ttk.Label(size_frame, textvariable=self.visual_size_value_var, width=6).grid(row=0, column=1, padx=(8, 0))
-        self.inputs.setdefault(group, {})["point_size"] = size_var
-
-        # ------------------------------------------------------------------
-        # 5) Interacción
-        # ------------------------------------------------------------------
-        interaction_box = self._section(tab, "Interacción", 4)
-        self._add_check(interaction_box, group, "hover_enabled", "Hover", True, 0, 0)
-        self._add_check(interaction_box, group, "inspector_enabled", "Inspector por clic", True, 0, 2)
-        self._add_combo(
-            interaction_box,
-            group,
-            "selection_mode",
-            "Selección",
-            ["Ninguna", "Lazo", "Rectángulo"],
-            "Ninguna",
-            1,
-            0,
+        builder_actions = ttk.Frame(tab)
+        builder_actions.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        builder_actions.grid_columnconfigure((0, 2), weight=1)
+        update_btn = ttk.Button(
+            builder_actions,
+            text="Actualizar constructor",
+            style="Accent.TButton",
+            command=self.update_visual_builder
         )
-        self._add_check(interaction_box, group, "legend_toggle", "Leyenda clicable", True, 1, 2)
-        self.visual_selection_status_var = tk.StringVar(value="0 registros seleccionados")
-        ttk.Label(interaction_box, textvariable=self.visual_selection_status_var, style="Subtle.TLabel").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+        update_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._add_help_marker(
+            builder_actions,
+            HELP_TEXTS["__button__.Actualizar constructor"],
+            row=0,
+            column=1,
+            padx=(0, 10),
         )
-        ttk.Button(interaction_box, text="Limpiar selección", command=self.clear_visual_selection).grid(
-            row=2, column=2, sticky="ew", padx=(0, 16), pady=(6, 0)
+        save_btn = ttk.Button(
+            builder_actions,
+            text="Guardar constructor",
+            style="Accent.TButton",
+            command=self.save_visual_builder_output
         )
-        create_sel_btn = ttk.Button(interaction_box, text="Crear dataset selección", command=self.create_dataset_from_visual_selection)
-        create_sel_btn.grid(row=2, column=3, sticky="ew", pady=(6, 0))
-        HelpTooltip(create_sel_btn, HELP_TEXTS["__button__.Crear dataset selección"])
+        save_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self._add_help_marker(
+            builder_actions,
+            HELP_TEXTS["__button__.Guardar constructor"],
+            row=0,
+            column=3,
+        )
 
-        # ------------------------------------------------------------------
-        # 6) Acciones de navegación/configuración
-        # ------------------------------------------------------------------
-        actions = ttk.LabelFrame(tab, text="Acciones", padding=8)
-        actions.grid(row=5, column=0, sticky="ew", pady=(0, 12))
-        for col in range(6):
-            actions.grid_columnconfigure(col, weight=1)
-
-        action_specs = [
-            ("Deshacer", self.undo_visual_view),
-            ("Rehacer", self.redo_visual_view),
-            ("Recomendar vistas", self.show_visual_recommendations),
-            ("Guardar preset", self.save_visual_preset),
-            ("Cargar preset", self.show_visual_presets),
-            ("Actualizar ahora", self.update_visual_builder),
-            ("Reset vista", self.reset_visual_view),
-            ("Abrir HTML", self.open_visual_interactive),
-            ("Guardar corrida", self.save_visual_builder_output),
-            ("Exportar todo", self.export_visual_builder_dialog),
-        ]
-        for i, (label, command) in enumerate(action_specs):
-            row = i // 5
-            col = i % 5
-            btn = ttk.Button(actions, text=label, command=command, style="Accent.TButton" if label in {"Actualizar ahora", "Guardar corrida"} else "TButton")
-            btn.grid(row=row, column=col, sticky="ew", padx=3, pady=3)
-            help_key = f"__button__.{label}"
-            if help_key in HELP_TEXTS:
-                HelpTooltip(btn, HELP_TEXTS[help_key])
-            if label == "Abrir HTML":
-                self.visual_open_html_btn = btn
-                btn.configure(state="disabled")
-
-        # ------------------------------------------------------------------
-        # 7) Vista Matplotlib interactiva
-        # ------------------------------------------------------------------
         builder_preview = ttk.LabelFrame(tab, text="Vista interactiva", padding=8)
-        builder_preview.grid(row=6, column=0, sticky="nsew", pady=(0, 12))
+        builder_preview.grid(row=5, column=0, sticky="nsew", pady=(0, 12))
+        builder_preview.grid_rowconfigure(1, weight=1)
         builder_preview.grid_columnconfigure(0, weight=1)
+        ttk.Label(
+            builder_preview,
+            text="Elige dataset, X, Y y marca capas. Despues pulsa Actualizar constructor.",
+            style="Subtle.TLabel"
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
-        self.visual_builder_hint_var = tk.StringVar(
-            value="Elige un dataset y variables. Con actualización automática la vista se redibuja sola."
+        self.visual_builder_figure = Figure(figsize=(8.6, 5.2), dpi=100)
+        self.visual_builder_ax = self.visual_builder_figure.add_subplot(111)
+        self.visual_builder_ax.text(
+            0.5,
+            0.5,
+            "Selecciona variables y actualiza el constructor",
+            ha="center",
+            va="center",
+            transform=self.visual_builder_ax.transAxes,
         )
-        ttk.Label(builder_preview, textvariable=self.visual_builder_hint_var, style="Subtle.TLabel").grid(
-            row=0, column=0, sticky="ew", pady=(0, 6)
-        )
-
-        self.visual_builder_canvas_host = ttk.Frame(builder_preview)
-        self.visual_builder_canvas_host.grid(row=1, column=0, sticky="nsew")
-        self.visual_builder_canvas_host.grid_columnconfigure(0, weight=1)
-        self.visual_builder_canvas_host.grid_rowconfigure(0, weight=1)
-        self.visual_builder_toolbar_host = ttk.Frame(builder_preview)
-        self.visual_builder_toolbar_host.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-
-        placeholder = Figure(figsize=(8.8, 5.2), dpi=100)
-        ax = placeholder.add_subplot(111)
-        ax.text(0.5, 0.5, "Selecciona variables para iniciar", ha="center", va="center", transform=ax.transAxes)
-        ax.set_axis_off()
-        self.visual_builder_figure = placeholder
-        self.visual_builder_ax = ax
-        self.visual_builder_canvas = FigureCanvasTkAgg(placeholder, master=self.visual_builder_canvas_host)
+        self.visual_builder_ax.set_axis_off()
+        self.visual_builder_canvas = FigureCanvasTkAgg(self.visual_builder_figure, master=builder_preview)
         self.visual_builder_canvas.draw()
-        self.visual_builder_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self.visual_builder_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
         self.visual_builder_toolbar = NavigationToolbar2Tk(
             self.visual_builder_canvas,
-            self.visual_builder_toolbar_host,
-            pack_toolbar=False,
+            builder_preview,
+            pack_toolbar=False
         )
-        self.visual_builder_toolbar.grid(row=0, column=0, sticky="ew")
+        self.visual_builder_toolbar.grid(row=2, column=0, sticky="ew")
+        self.visual_builder_current_data = None
+        self.visual_builder_current_config = None
 
-        # ------------------------------------------------------------------
-        # 8) Estadísticas, selección e inspector
-        # ------------------------------------------------------------------
-        details_box = ttk.LabelFrame(tab, text="Detalles de la vista", padding=8)
-        details_box.grid(row=7, column=0, sticky="ew", pady=(0, 12))
-        details_box.grid_columnconfigure(0, weight=1)
-        details_notebook = ttk.Notebook(details_box)
-        details_notebook.grid(row=0, column=0, sticky="ew")
-
-        stats_frame = ttk.Frame(details_notebook, padding=6)
-        selection_frame = ttk.Frame(details_notebook, padding=6)
-        record_frame = ttk.Frame(details_notebook, padding=6)
-        details_notebook.add(stats_frame, text="Estadísticas")
-        details_notebook.add(selection_frame, text="Selección")
-        details_notebook.add(record_frame, text="Inspector")
-        for frame in (stats_frame, selection_frame, record_frame):
-            frame.grid_columnconfigure(0, weight=1)
-
-        self.visual_builder_stats_text = tk.Text(stats_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
-        self.visual_builder_stats_text.grid(row=0, column=0, sticky="ew")
-        self.visual_builder_selection_text = tk.Text(selection_frame, height=9, wrap="none", relief="flat", bg="#ffffff")
-        self.visual_builder_selection_text.grid(row=0, column=0, sticky="ew")
-        self.visual_builder_record_text = tk.Text(record_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
-        self.visual_builder_record_text.grid(row=0, column=0, sticky="ew")
-        self._set_visual_text(self.visual_builder_stats_text, "Actualiza una visualización para ver estadísticas.")
-        self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
-        self._set_visual_text(self.visual_builder_record_text, "Haz clic sobre un punto para inspeccionar el registro.")
-
-        # Traces se registran al final para no disparar actualizaciones durante la construcción.
-        self._bind_visual_auto_update_traces()
-        self.after_idle(self.refresh_visual_filter_candidates)
+        self._run_button(tab, 6, "Generar visualizaciones", lambda: self.run_analysis("visualization"))
 
 
     def _build_kde_tab(self):
@@ -2753,920 +2543,246 @@ class MicrobiotaGUI(tk.Tk):
         return var.get()
 
 
-    def _set_visual_text(self, widget, text):
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("1.0", str(text))
-        widget.configure(state="disabled")
-
-
-    def _plot_type_to_backend(self, value):
-        mapping = {
-            "Automático": "auto",
-            "Dispersión": "scatter",
-            "Línea": "line",
-            "Barras": "bar",
-            "Histograma": "histogram",
-            "Boxplot": "boxplot",
-            "Violín": "violin",
-            "Densidad": "density",
-            "Heatmap": "heatmap",
-            "Rank-abundancia": "rank_abundance",
-        }
-        return mapping.get(str(value).strip(), str(value).strip().lower() or "auto")
-
-
-    def _plot_type_to_ui(self, value):
-        mapping = {
-            "auto": "Automático",
-            "scatter": "Dispersión",
-            "line": "Línea",
-            "bar": "Barras",
-            "histogram": "Histograma",
-            "boxplot": "Boxplot",
-            "violin": "Violín",
-            "density": "Densidad",
-            "heatmap": "Heatmap",
-            "rank_abundance": "Rank-abundancia",
-        }
-        return mapping.get(str(value).strip().lower(), str(value))
-
-
-    def _bind_visual_auto_update_traces(self):
-        group = "visualization"
-        for key, var in self.inputs.get(group, {}).items():
-            try:
-                var.trace_add("write", lambda *_args, k=key: self._on_visual_input_changed(k))
-            except Exception:
-                pass
-
-        try:
-            self.inputs[group]["point_alpha"].trace_add("write", lambda *_: self._update_visual_slider_labels())
-            self.inputs[group]["point_size"].trace_add("write", lambda *_: self._update_visual_slider_labels())
-        except Exception:
-            pass
-        self._update_visual_slider_labels()
-
-
-    def _update_visual_slider_labels(self):
-        try:
-            self.visual_alpha_value_var.set(f"{float(self._input_value('visualization', 'point_alpha', 0.75)):.2f}")
-        except Exception:
-            pass
-        try:
-            self.visual_size_value_var.set(f"{float(self._input_value('visualization', 'point_size', 34)):.0f}")
-        except Exception:
-            pass
-
-
-    def _on_visual_input_changed(self, key=None):
-        if self.visual_builder_applying_state:
-            return
-
-        group = "visualization"
-        if key == "df_name":
-            self.after_idle(self.refresh_visual_filter_candidates)
-
-        if key == "rank_abundance":
-            try:
-                if parse_bool(self.inputs[group]["rank_abundance"].get()):
-                    self.visual_builder_applying_state = True
-                    self.inputs[group]["plot_type"].set("Rank-abundancia")
-                self.visual_builder_applying_state = False
-            except Exception:
-                self.visual_builder_applying_state = False
-
-        if key == "plot_type":
-            try:
-                is_rank = self._plot_type_to_backend(self.inputs[group]["plot_type"].get()) == "rank_abundance"
-                current = parse_bool(self.inputs[group]["rank_abundance"].get())
-                if is_rank != current:
-                    self.visual_builder_applying_state = True
-                    self.inputs[group]["rank_abundance"].set(is_rank)
-                    self.visual_builder_applying_state = False
-            except Exception:
-                self.visual_builder_applying_state = False
-
-        self._schedule_visual_update()
-
-
-    def _schedule_visual_update(self):
-        if self.visual_builder_applying_state:
-            return
-        auto_var = self.inputs.get("visualization", {}).get("auto_update")
-        if auto_var is None or not parse_bool(auto_var.get()):
-            return
-        df_name = self._input_value("visualization", "df_name").strip()
-        if not df_name or df_name not in self.dfs:
-            return
-        self.visual_builder_debouncer.trigger(lambda: self.update_visual_builder(show_errors=False))
-
-
-    def refresh_visual_filter_candidates(self):
-        if not hasattr(self, "visual_filter_column_combo"):
-            return
-        df_name = self._input_value("visualization", "df_name").strip()
-        df = self.dfs.get(df_name)
-
-        if df_name != self.visual_filter_dataset_name:
-            self._clear_visual_filter_widgets()
-            self.visual_filter_dataset_name = df_name
-
-        if df is None:
-            self.visual_filter_specs = {}
-            self.visual_filter_column_combo.configure(values=[])
-            self.visual_filter_column_var.set("")
-            return
-
-        try:
-            specs = infer_filter_specs(df)
-        except Exception:
-            specs = []
-        self.visual_filter_specs = {str(spec.column): spec for spec in specs}
-        columns = list(self.visual_filter_specs.keys())
-        self.visual_filter_column_combo.configure(values=columns)
-        if columns and self.visual_filter_column_var.get() not in columns:
-            self.visual_filter_column_var.set(columns[0])
-        elif not columns:
-            self.visual_filter_column_var.set("")
-
-
-    def _clear_visual_filter_widgets(self):
-        if not hasattr(self, "visual_filters_container"):
-            self.visual_filter_rows = {}
-            return
-        for child in self.visual_filters_container.winfo_children():
-            child.destroy()
-        self.visual_filter_rows = {}
-        if hasattr(self, "visual_filters_empty_var"):
-            self.visual_filters_empty_var.set("Selecciona una columna y pulsa Agregar filtro.")
-        ttk.Label(
-            self.visual_filters_container,
-            textvariable=self.visual_filters_empty_var,
-            style="Subtle.TLabel",
-        ).grid(row=0, column=0, sticky="w")
-
-
-    def clear_visual_filters(self, schedule=True):
-        self._clear_visual_filter_widgets()
-        if schedule:
-            self._schedule_visual_update()
-
-
-    def add_visual_filter(self, column=None, initial_rule=None, schedule=True):
-        if not hasattr(self, "visual_filters_container"):
-            return
-        column = str(column or self.visual_filter_column_var.get()).strip()
-        if not column or column not in self.visual_filter_specs:
-            return
-        if column in self.visual_filter_rows:
-            return
-
-        # Quita el texto vacío la primera vez que se agrega un filtro.
-        if not self.visual_filter_rows:
-            for child in self.visual_filters_container.winfo_children():
-                child.destroy()
-
-        spec = self.visual_filter_specs[column]
-        row_frame = ttk.Frame(self.visual_filters_container)
-        row_frame.grid(row=len(self.visual_filter_rows), column=0, sticky="ew", pady=3)
-        row_frame.grid_columnconfigure(1, weight=1)
-        ttk.Label(row_frame, text=column, width=24).grid(row=0, column=0, sticky="w", padx=(0, 6))
-
-        include_na = tk.BooleanVar(value=False)
-        record = {"frame": row_frame, "kind": spec.kind, "include_na": include_na}
-
-        if spec.kind == "numeric":
-            lo_default = "" if spec.minimum is None else f"{spec.minimum:g}"
-            hi_default = "" if spec.maximum is None else f"{spec.maximum:g}"
-            if isinstance(initial_rule, dict):
-                lo_default = "" if initial_rule.get("min") is None else str(initial_rule.get("min"))
-                hi_default = "" if initial_rule.get("max") is None else str(initial_rule.get("max"))
-                include_na.set(bool(initial_rule.get("include_na", False)))
-            lo_var = tk.StringVar(value=lo_default)
-            hi_var = tk.StringVar(value=hi_default)
-            editor = ttk.Frame(row_frame)
-            editor.grid(row=0, column=1, sticky="ew")
-            editor.grid_columnconfigure((0, 2), weight=1)
-            ttk.Entry(editor, textvariable=lo_var, width=14).grid(row=0, column=0, sticky="ew")
-            ttk.Label(editor, text=" a ").grid(row=0, column=1)
-            ttk.Entry(editor, textvariable=hi_var, width=14).grid(row=0, column=2, sticky="ew")
-            record.update({"min_var": lo_var, "max_var": hi_var})
-            vars_to_trace = [lo_var, hi_var, include_na]
-        elif spec.kind == "datetime":
-            start_default = ""
-            end_default = ""
-            if spec.values:
-                start_default = str(spec.values[0])
-                end_default = str(spec.values[-1])
-            if isinstance(initial_rule, dict):
-                start_default = str(initial_rule.get("start", initial_rule.get("min", start_default)) or "")
-                end_default = str(initial_rule.get("end", initial_rule.get("max", end_default)) or "")
-                include_na.set(bool(initial_rule.get("include_na", False)))
-            start_var = tk.StringVar(value=start_default)
-            end_var = tk.StringVar(value=end_default)
-            editor = ttk.Frame(row_frame)
-            editor.grid(row=0, column=1, sticky="ew")
-            editor.grid_columnconfigure((0, 2), weight=1)
-            ttk.Entry(editor, textvariable=start_var).grid(row=0, column=0, sticky="ew")
-            ttk.Label(editor, text=" a ").grid(row=0, column=1)
-            ttk.Entry(editor, textvariable=end_var).grid(row=0, column=2, sticky="ew")
-            record.update({"start_var": start_var, "end_var": end_var})
-            vars_to_trace = [start_var, end_var, include_na]
-        else:
-            values = [str(v) for v in spec.values]
-            default_values = ""
-            if isinstance(initial_rule, dict):
-                selected = initial_rule.get("values", initial_rule.get("selected", []))
-                default_values = ", ".join(map(str, selected or []))
-                include_na.set(bool(initial_rule.get("include_na", False)))
-            elif isinstance(initial_rule, (list, tuple, set)):
-                default_values = ", ".join(map(str, initial_rule))
-            elif initial_rule not in (None, ""):
-                default_values = str(initial_rule)
-            values_var = tk.StringVar(value=default_values)
-            combo = ttk.Combobox(row_frame, textvariable=values_var, values=values, state="normal")
-            combo.grid(row=0, column=1, sticky="ew")
-            record.update({"values_var": values_var, "values": values})
-            vars_to_trace = [values_var, include_na]
-
-        na_check = ttk.Checkbutton(row_frame, text="NA", variable=include_na)
-        na_check.grid(row=0, column=2, padx=(8, 4))
-        ttk.Button(row_frame, text="×", width=3, command=lambda c=column: self.remove_visual_filter(c)).grid(row=0, column=3)
-
-        self.visual_filter_rows[column] = record
-        self.visual_filters_empty_var.set("")
-        for var in vars_to_trace:
-            try:
-                var.trace_add("write", lambda *_args: self._schedule_visual_update())
-            except Exception:
-                pass
-        if schedule:
-            self._schedule_visual_update()
-
-
-    def remove_visual_filter(self, column):
-        record = self.visual_filter_rows.pop(column, None)
-        if record:
-            record["frame"].destroy()
-        # Reacomoda las filas.
-        for row, item in enumerate(self.visual_filter_rows.values()):
-            item["frame"].grid_configure(row=row)
-        if not self.visual_filter_rows:
-            self._clear_visual_filter_widgets()
-        self._schedule_visual_update()
-
-
-    def _collect_visual_filters(self):
-        filters = {}
-        for column, record in self.visual_filter_rows.items():
-            kind = record["kind"]
-            include_na = bool(record["include_na"].get())
-            if kind == "numeric":
-                lo = parse_optional_float(record["min_var"].get())
-                hi = parse_optional_float(record["max_var"].get())
-                filters[column] = {"min": lo, "max": hi, "include_na": include_na}
-            elif kind == "datetime":
-                start = record["start_var"].get().strip() or None
-                end = record["end_var"].get().strip() or None
-                if start is not None or end is not None or include_na:
-                    filters[column] = {"start": start, "end": end, "include_na": include_na}
-            else:
-                values = split_list(record["values_var"].get()) or []
-                if values or include_na:
-                    # Intenta recuperar el tipo original cuando sea posible.
-                    spec = self.visual_filter_specs.get(column)
-                    typed_values = values
-                    if spec is not None and spec.values:
-                        lookup = {str(v): v for v in spec.values}
-                        typed_values = [lookup.get(v, v) for v in values]
-                    filters[column] = {"values": typed_values, "include_na": include_na}
-        return filters
-
-
     def _collect_visual_builder_config(self):
         group = "visualization"
         df_name = self._input_value(group, "df_name").strip()
+        x_col = self._input_value(group, "x_col").strip()
+        y_col = self._input_value(group, "y_col").strip()
+        hue_col = self._input_value(group, "hue_col").strip()
+
         if not df_name:
             raise ValueError("Selecciona un dataset.")
         if df_name not in self.dfs:
             raise KeyError(f"No existe el dataset '{df_name}'.")
+        if not x_col or not y_col:
+            raise ValueError("Selecciona variables X e Y para construir la grafica.")
 
-        plot_type = self._plot_type_to_backend(self._input_value(group, "plot_type", "Automático"))
-        if parse_bool(self.inputs[group]["rank_abundance"].get()):
-            plot_type = "rank_abundance"
+        alpha = float(self._input_value(group, "point_alpha", "0.75") or 0.75)
+        point_size = float(self._input_value(group, "point_size", "34") or 34)
 
-        x_col = self._input_value(group, "x_col").strip() or None
-        y_col = self._input_value(group, "y_col").strip() or None
-        hue_col = self._input_value(group, "hue_col").strip() or None
-        facet_col = self._input_value(group, "facet_col").strip() or None
-        id_col = self._input_value(group, "builder_id_col").strip() or None
-
-        cfg = VisualizationConfig(
-            plot_type=plot_type,
-            x=x_col,
-            y=y_col,
-            color=hue_col,
-            facet=facet_col,
-            id_col=id_col,
-            hover_cols=split_list(self._input_value(group, "hover_cols")) or [],
-            filters=self._collect_visual_filters(),
-            points=parse_bool(self.inputs[group]["layer_scatter"].get()),
-            line=parse_bool(self.inputs[group]["layer_line"].get()),
-            trend=parse_bool(self.inputs[group]["layer_trend"].get()),
-            density=parse_bool(self.inputs[group]["layer_density"].get()),
-            centroids=parse_bool(self.inputs[group]["layer_centroids"].get()),
-            show_stats=parse_bool(self.inputs[group]["show_stats"].get()),
-            log_x=parse_bool(self.inputs[group]["builder_log_x"].get()),
-            log_y=parse_bool(self.inputs[group]["builder_log_y"].get()),
-            opacity=min(max(float(self._input_value(group, "point_alpha", 0.75)), 0.05), 1.0),
-            point_size=min(max(float(self._input_value(group, "point_size", 34)), 4.0), 300.0),
-            bins=max(2, int(float(self._input_value(group, "builder_bins", 30) or 30))),
-            max_facets=max(1, int(float(self._input_value(group, "max_facets", 12) or 12))),
-            heatmap_cols=split_list(self._input_value(group, "heatmap_cols")) or [],
-            abundance_cols=split_list(self._input_value(group, "abundance_cols")) or [],
-            abundance_id_col=self._input_value(group, "abundance_id_col").strip() or None,
-            abundance_group_col=self._input_value(group, "abundance_group_col").strip() or None,
-            top_n=parse_optional_int(self._input_value(group, "top_n")),
-            rank_log_scale=parse_bool(self.inputs[group]["log_scale"].get()),
-            rank_show_cumulative=parse_bool(self.inputs[group]["rank_show_cumulative"].get()),
-            rank_highlight_top=max(0, int(float(self._input_value(group, "rank_highlight_top", 10) or 10))),
-            rank_search=self._input_value(group, "rank_search").strip() or None,
-            title=self._input_value(group, "builder_title").strip() or None,
-            interactive=True,
-        )
-        return {"df_name": df_name, **cfg.to_dict()}
+        return {
+            "df_name": df_name,
+            "x_col": x_col,
+            "y_col": y_col,
+            "hue_col": hue_col or None,
+            "layer_scatter": parse_bool(self.inputs[group]["layer_scatter"].get()),
+            "layer_line": parse_bool(self.inputs[group]["layer_line"].get()),
+            "layer_trend": parse_bool(self.inputs[group]["layer_trend"].get()),
+            "layer_density": parse_bool(self.inputs[group]["layer_density"].get()),
+            "layer_centroids": parse_bool(self.inputs[group]["layer_centroids"].get()),
+            "builder_log_x": parse_bool(self.inputs[group]["builder_log_x"].get()),
+            "builder_log_y": parse_bool(self.inputs[group]["builder_log_y"].get()),
+            "point_alpha": min(max(alpha, 0.05), 1.0),
+            "point_size": min(max(point_size, 4), 300),
+        }
 
 
-    def _state_to_visual_config(self, state):
-        return VisualizationConfig.from_mapping({k: v for k, v in state.items() if k != "df_name"})
+    def _prepare_visual_builder_data(self, config):
+        df = self.dfs[config["df_name"]].copy()
+        x_col = config["x_col"]
+        y_col = config["y_col"]
+        hue_col = config["hue_col"]
+
+        for col in [x_col, y_col]:
+            if col not in df.columns:
+                raise KeyError(f"La columna '{col}' no existe en '{config['df_name']}'.")
+        if hue_col and hue_col not in df.columns:
+            raise KeyError(f"La columna de color '{hue_col}' no existe en '{config['df_name']}'.")
+
+        cols = [x_col, y_col] + ([hue_col] if hue_col else [])
+        plot_df = df[cols].copy()
+        plot_df[x_col] = pd.to_numeric(plot_df[x_col], errors="coerce")
+        plot_df[y_col] = pd.to_numeric(plot_df[y_col], errors="coerce")
+        plot_df = plot_df.dropna(subset=[x_col, y_col])
+
+        if config["builder_log_x"]:
+            plot_df = plot_df[plot_df[x_col] > 0]
+        if config["builder_log_y"]:
+            plot_df = plot_df[plot_df[y_col] > 0]
+
+        if plot_df.empty:
+            raise ValueError("No quedaron datos validos para graficar con esos filtros.")
+
+        return plot_df.reset_index(drop=True)
 
 
-    def _format_visual_object(self, value, max_rows=30):
-        if value is None:
-            return "Sin estadísticas para esta vista."
-        if isinstance(value, pd.DataFrame):
-            return value.head(max_rows).to_string(index=False)
-        if isinstance(value, pd.Series):
-            return value.head(max_rows).to_string()
-        if isinstance(value, dict):
-            lines = []
-            for key, item in value.items():
-                lines.append(f"[{key}]")
-                if isinstance(item, pd.DataFrame):
-                    lines.append(item.head(max_rows).to_string(index=False))
-                elif isinstance(item, pd.Series):
-                    lines.append(item.head(max_rows).to_string())
-                elif isinstance(item, dict):
-                    try:
-                        lines.append(json.dumps(json_safe(item), ensure_ascii=False, indent=2))
-                    except Exception:
-                        lines.append(str(item))
-                else:
-                    lines.append(str(item))
-                lines.append("")
-            return "\n".join(lines).strip()
-        try:
-            return json.dumps(json_safe(value), ensure_ascii=False, indent=2)
-        except Exception:
-            return str(value)
+    def _draw_visual_builder(self, plot_df, config):
+        fig = self.visual_builder_figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        self.visual_builder_ax = ax
 
+        x_col = config["x_col"]
+        y_col = config["y_col"]
+        hue_col = config["hue_col"]
+        has_hue = bool(hue_col and hue_col in plot_df.columns)
 
-    def _render_visual_builder_result(self, result, state):
-        if self.visual_builder_interaction is not None:
-            try:
-                self.visual_builder_interaction.disconnect()
-            except Exception:
-                pass
-            self.visual_builder_interaction = None
-
-        old_figure = getattr(self, "visual_builder_figure", None)
-        for child in self.visual_builder_canvas_host.winfo_children():
-            child.destroy()
-        for child in self.visual_builder_toolbar_host.winfo_children():
-            child.destroy()
-
-        self.visual_builder_result = result
-        self.visual_builder_current_data = result.data
-        self.visual_builder_current_config = state
-        self.visual_builder_figure = result.figure
-        self.visual_builder_ax = result.axes[0] if result.axes else None
-
-        self.visual_builder_canvas = FigureCanvasTkAgg(result.figure, master=self.visual_builder_canvas_host)
-        self.visual_builder_canvas.draw()
-        self.visual_builder_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        self.visual_builder_toolbar = NavigationToolbar2Tk(
-            self.visual_builder_canvas,
-            self.visual_builder_toolbar_host,
-            pack_toolbar=False,
-        )
-        self.visual_builder_toolbar.grid(row=0, column=0, sticky="ew")
-
-        if old_figure is not None and old_figure is not result.figure:
-            try:
-                plt.close(old_figure)
-            except Exception:
-                pass
-
-        self._set_visual_text(self.visual_builder_stats_text, self._format_visual_object(result.stats))
-        self.clear_visual_selection(update_text=True)
-        self._set_visual_text(self.visual_builder_record_text, "Haz clic sobre un punto para inspeccionar el registro.")
-
-        html_available = result.interactive_html is not None
-        if hasattr(self, "visual_open_html_btn"):
-            self.visual_open_html_btn.configure(state="normal" if html_available else "disabled")
-
-        # Interacción Matplotlib desacoplada del backend de gráficos.
-        hover_cols = list(state.get("hover_cols") or [])
-        id_col = state.get("id_col")
-        if id_col and id_col not in hover_cols:
-            hover_cols.insert(0, id_col)
-        controller = InteractiveController(
-            figure=result.figure,
-            canvas=self.visual_builder_canvas,
-            data=result.data if isinstance(result.data, pd.DataFrame) else pd.DataFrame(),
-            hover_cols=hover_cols,
-            on_selection=self._on_visual_selection,
-            on_record=self._on_visual_record,
-        )
-        controller.remember_view()
-        if parse_bool(self.inputs["visualization"]["hover_enabled"].get()):
-            controller.attach_hover()
-        if parse_bool(self.inputs["visualization"]["inspector_enabled"].get()):
-            controller.attach_point_inspector()
-
-        selection_mode = self._input_value("visualization", "selection_mode", "Ninguna")
-        if selection_mode == "Lazo":
-            for ax in result.axes:
-                controller.attach_lasso(ax)
-        elif selection_mode == "Rectángulo":
-            for ax in result.axes:
-                controller.attach_rectangle(ax)
-        if parse_bool(self.inputs["visualization"]["legend_toggle"].get()):
-            controller.attach_legend_toggle()
-        self.visual_builder_interaction = controller
-
-        plot_type = result.metadata.get("plot_type", state.get("plot_type", ""))
-        rows = len(result.data) if isinstance(result.data, pd.DataFrame) else 0
-        self.visual_builder_hint_var.set(
-            f"{state['df_name']} | {plot_type} | {rows:,} registros visibles"
-        )
-
-
-    def update_visual_builder(self, show_errors=True, push_history=True):
-        try:
-            state = self._collect_visual_builder_config()
-            df = self.dfs[state["df_name"]]
-            cfg = self._state_to_visual_config(state)
-            result = build_visualization(df, cfg)
-            self._render_visual_builder_result(result, state)
-            if push_history and not self.visual_builder_applying_state:
-                self.visual_builder_history.push(state)
-            rows = len(result.data) if isinstance(result.data, pd.DataFrame) else 0
-            if hasattr(self, "status_var"):
-                self.status_var.set(f"Constructor actualizado: {rows} registros")
-            if show_errors or parse_bool(self.inputs["visualization"]["verbose"].get()):
-                self._log(
-                    f"Constructor visual V2: {state['df_name']} | "
-                    f"{result.metadata.get('plot_type', state.get('plot_type'))} | filas={rows}"
-                )
-            return result
-        except Exception as exc:
-            if show_errors:
-                messagebox.showerror(APP_TITLE, f"No se pudo construir la gráfica:\n{exc}")
-                self._log(f"Error en constructor visual: {exc}")
-            elif hasattr(self, "status_var"):
-                self.status_var.set(f"Vista pendiente: {exc}")
-            return None
-
-
-    def _on_visual_record(self, index, row):
-        lines = [f"Índice fuente: {index}", ""]
-        for key, value in row.items():
-            if key == "__source_index__":
-                continue
-            lines.append(f"{key}: {value}")
-        self._set_visual_text(self.visual_builder_record_text, "\n".join(lines))
-
-
-    def _on_visual_selection(self, indices, selected_df):
-        self.visual_builder_selected_indices = list(indices)
-        self.visual_builder_selected_df = selected_df.copy()
-        self.visual_selection_status_var.set(f"{len(indices)} registros seleccionados")
-
-        if selected_df.empty:
-            self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
-            return
-
-        preview = selected_df.drop(columns=["__source_index__"], errors="ignore").head(20)
-        lines = [f"Registros seleccionados: {len(selected_df)}", "", preview.to_string(index=False)]
-
-        state = self.visual_builder_current_config or {}
-        value_col = state.get("y") or state.get("x")
-        group_col = state.get("color")
-        try:
-            routes = suggest_analysis_routes(
-                selected_df,
-                value_col=value_col,
-                group_col=group_col,
+        if config["layer_density"]:
+            hb = ax.hexbin(
+                plot_df[x_col],
+                plot_df[y_col],
+                gridsize=32,
+                mincnt=1,
+                cmap="Blues",
+                alpha=0.28,
+                linewidths=0,
             )
-        except Exception:
-            routes = []
-        if routes:
-            lines.extend(["", "Rutas sugeridas:"])
-            lines.extend(f"- {route.get('label', route.get('module'))}" for route in routes)
-        self._set_visual_text(self.visual_builder_selection_text, "\n".join(lines))
+            fig.colorbar(hb, ax=ax, label="Densidad")
+
+        if has_hue:
+            groups = list(plot_df.groupby(hue_col, dropna=False))
+            colors = plt.cm.tab10(np.linspace(0, 1, max(len(groups), 1)))
+        else:
+            groups = [("Datos", plot_df)]
+            colors = ["#2f6f9f"]
+
+        for idx, (group_name, subset) in enumerate(groups):
+            subset = subset.sort_values(x_col)
+            color = colors[idx % len(colors)]
+            label = str(group_name)
+
+            if config["layer_scatter"]:
+                ax.scatter(
+                    subset[x_col],
+                    subset[y_col],
+                    s=config["point_size"],
+                    alpha=config["point_alpha"],
+                    label=label,
+                    color=color,
+                    edgecolors="white",
+                    linewidths=0.35,
+                )
+
+            if config["layer_line"] and len(subset) >= 2:
+                ax.plot(
+                    subset[x_col],
+                    subset[y_col],
+                    color=color,
+                    alpha=0.65,
+                    linewidth=1.2,
+                    label=f"{label} linea" if not config["layer_scatter"] else None,
+                )
+
+            if config["layer_trend"] and len(subset) >= 3 and subset[x_col].nunique() >= 2:
+                try:
+                    coef = np.polyfit(subset[x_col].to_numpy(dtype=float), subset[y_col].to_numpy(dtype=float), 1)
+                    x_line = np.linspace(float(subset[x_col].min()), float(subset[x_col].max()), 120)
+                    y_line = coef[0] * x_line + coef[1]
+                    ax.plot(
+                        x_line,
+                        y_line,
+                        color=color,
+                        linestyle="--",
+                        linewidth=2.0,
+                        alpha=0.9,
+                        label=f"{label} tendencia",
+                    )
+                except Exception:
+                    pass
+
+            if config["layer_centroids"]:
+                cx = float(subset[x_col].mean())
+                cy = float(subset[y_col].mean())
+                ax.scatter(
+                    [cx],
+                    [cy],
+                    marker="X",
+                    s=max(config["point_size"] * 3, 90),
+                    color=color,
+                    edgecolors="black",
+                    linewidths=0.8,
+                    label=f"{label} centroide",
+                    zorder=5,
+                )
+                if has_hue:
+                    ax.annotate(str(group_name), (cx, cy), textcoords="offset points", xytext=(6, 6), fontsize=8)
+
+        if config["builder_log_x"]:
+            ax.set_xscale("log")
+        if config["builder_log_y"]:
+            ax.set_yscale("log")
+
+        ax.set_xlabel(x_col)
+        ax.set_ylabel(y_col)
+        ax.set_title(f"{config['df_name']} | {x_col} vs {y_col}")
+        ax.grid(True, alpha=0.25)
+
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize=8, loc="best")
+
+        fig.tight_layout()
+        self.visual_builder_canvas.draw()
 
 
-    def clear_visual_selection(self, update_text=True):
-        self.visual_builder_selected_indices = []
-        self.visual_builder_selected_df = None
-        if hasattr(self, "visual_selection_status_var"):
-            self.visual_selection_status_var.set("0 registros seleccionados")
-        if update_text and hasattr(self, "visual_builder_selection_text"):
-            self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
-        if self.visual_builder_interaction is not None:
-            self.visual_builder_interaction.selected_indices = []
-
-
-    def create_dataset_from_visual_selection(self):
-        if self.visual_builder_result is None or not self.visual_builder_selected_indices:
-            messagebox.showinfo(APP_TITLE, "Selecciona uno o varios registros en el gráfico primero.")
-            return
-        if not isinstance(self.visual_builder_result.data, pd.DataFrame):
-            return
-        selected = dataset_from_selection(
-            self.visual_builder_result.data,
-            self.visual_builder_selected_indices,
-        )
-        selected = selected.drop(columns=["__source_index__"], errors="ignore")
-        if selected.empty:
-            messagebox.showinfo(APP_TITLE, "La selección actual no contiene registros.")
-            return
-        base = (self.visual_builder_current_config or {}).get("df_name", "dataset")
-        name = unique_name(f"{base}_seleccion", self.dfs)
-        self.dfs[name] = selected
-        self.refresh_datasets()
-        self._log(f"Dataset creado desde selección visual: {name} -> {selected.shape}")
-        self.status_var.set(f"Nuevo dataset: {name}")
-
-
-    def reset_visual_view(self):
-        if self.visual_builder_interaction is not None:
-            self.visual_builder_interaction.reset_view()
-
-
-    def open_visual_interactive(self):
-        result = self.visual_builder_result
-        if result is None or result.interactive_html is None:
-            messagebox.showinfo(APP_TITLE, "Esta vista no tiene versión HTML interactiva disponible.")
-            return
-        output_root = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR).expanduser()
-        preview_dir = output_root / "interactive_preview"
-        preview_dir.mkdir(parents=True, exist_ok=True)
-        stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = result.interactive_html.filename or f"visual_{stamp}.html"
-        path = preview_dir / f"{stamp}_{sanitize_name(filename, 'visual.html')}"
-        if path.suffix.lower() != ".html":
-            path = path.with_suffix(".html")
-        path.write_text(result.interactive_html.html, encoding="utf-8")
-        webbrowser.open(path.resolve().as_uri())
-        self._log(f"HTML interactivo abierto: {path}")
-
-
-    def _apply_visual_state(self, state, update=True):
-        if not state:
-            return
-        group = "visualization"
-        self.visual_builder_applying_state = True
+    def update_visual_builder(self):
         try:
-            df_name = state.get("df_name", self._input_value(group, "df_name"))
-            if df_name:
-                self.inputs[group]["df_name"].set(df_name)
-                self.refresh_columns()
-                self.refresh_visual_filter_candidates()
-
-            mapping = {
-                "x": "x_col",
-                "y": "y_col",
-                "color": "hue_col",
-                "facet": "facet_col",
-                "id_col": "builder_id_col",
-                "title": "builder_title",
-                "max_facets": "max_facets",
-                "bins": "builder_bins",
-                "points": "layer_scatter",
-                "line": "layer_line",
-                "trend": "layer_trend",
-                "density": "layer_density",
-                "centroids": "layer_centroids",
-                "show_stats": "show_stats",
-                "log_x": "builder_log_x",
-                "log_y": "builder_log_y",
-                "opacity": "point_alpha",
-                "point_size": "point_size",
-                "abundance_id_col": "abundance_id_col",
-                "abundance_group_col": "abundance_group_col",
-                "top_n": "top_n",
-                "rank_log_scale": "log_scale",
-                "rank_show_cumulative": "rank_show_cumulative",
-                "rank_highlight_top": "rank_highlight_top",
-                "rank_search": "rank_search",
-            }
-            self.inputs[group]["plot_type"].set(self._plot_type_to_ui(state.get("plot_type", "auto")))
-            self.inputs[group]["rank_abundance"].set(state.get("plot_type") == "rank_abundance")
-
-            for source_key, gui_key in mapping.items():
-                if source_key not in state or gui_key not in self.inputs[group]:
-                    continue
-                value = state[source_key]
-                var = self.inputs[group][gui_key]
-                if isinstance(var, tk.BooleanVar):
-                    var.set(bool(value))
-                elif isinstance(var, tk.DoubleVar):
-                    if value is not None:
-                        var.set(float(value))
-                else:
-                    var.set("" if value is None else str(value))
-
-            self.inputs[group]["hover_cols"].set(", ".join(state.get("hover_cols") or []))
-            self.inputs[group]["heatmap_cols"].set(", ".join(state.get("heatmap_cols") or []))
-            self.inputs[group]["abundance_cols"].set(", ".join(state.get("abundance_cols") or []))
-
-            self._clear_visual_filter_widgets()
-            for column, rule in (state.get("filters") or {}).items():
-                if column in self.visual_filter_specs:
-                    self.add_visual_filter(column=column, initial_rule=rule, schedule=False)
-        finally:
-            self.visual_builder_applying_state = False
-
-        self._update_visual_slider_labels()
-        if update:
-            self.update_visual_builder(show_errors=True, push_history=False)
-
-
-    def undo_visual_view(self):
-        state = self.visual_builder_history.undo()
-        if state:
-            self._apply_visual_state(state, update=True)
-
-
-    def redo_visual_view(self):
-        state = self.visual_builder_history.redo()
-        if state:
-            self._apply_visual_state(state, update=True)
-
-
-    def _visual_preset_path(self):
-        output_root = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR).expanduser()
-        output_root.mkdir(parents=True, exist_ok=True)
-        return output_root / "visualization_presets.json"
-
-
-    def _ensure_visual_presets_loaded(self):
-        if self.visual_builder_presets_loaded:
-            return
-        path = self._visual_preset_path()
-        if path.exists():
-            try:
-                self.visual_builder_presets.load_file(path)
-            except Exception as exc:
-                self._log(f"No se pudieron cargar presets de visualización: {exc}")
-        self.visual_builder_presets_loaded = True
-
-
-    def save_visual_preset(self):
-        try:
-            state = self._collect_visual_builder_config()
+            config = self._collect_visual_builder_config()
+            plot_df = self._prepare_visual_builder_data(config)
+            self._draw_visual_builder(plot_df, config)
+            self.visual_builder_current_data = plot_df
+            self.visual_builder_current_config = config
+            self.status_var.set(f"Constructor actualizado: {len(plot_df)} filas")
+            self._log(f"Constructor visual actualizado: {config['df_name']} | {config['x_col']} vs {config['y_col']} | filas={len(plot_df)}")
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"No se puede guardar el preset:\n{exc}")
-            return
-        name = simpledialog.askstring(APP_TITLE, "Nombre del preset:", parent=self)
-        if not name:
-            return
-        self._ensure_visual_presets_loaded()
-        self.visual_builder_presets.save(name, state)
-        self.visual_builder_presets.save_file(self._visual_preset_path())
-        self._log(f"Preset de visualización guardado: {name}")
-
-
-    def show_visual_presets(self):
-        self._ensure_visual_presets_loaded()
-        names = self.visual_builder_presets.names()
-        if not names:
-            messagebox.showinfo(APP_TITLE, "Aún no hay presets de visualización guardados.")
-            return
-
-        top = tk.Toplevel(self)
-        top.title("Presets de visualización")
-        top.geometry("520x360")
-        frame = ttk.Frame(top, padding=10)
-        frame.pack(fill="both", expand=True)
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
-        listbox = tk.Listbox(frame)
-        listbox.grid(row=0, column=0, sticky="nsew")
-        for name in names:
-            listbox.insert("end", name)
-
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        buttons.grid_columnconfigure((0, 1), weight=1)
-
-        def apply_selected():
-            selection = listbox.curselection()
-            if not selection:
-                return
-            name = listbox.get(selection[0])
-            state = self.visual_builder_presets.get(name)
-            top.destroy()
-            self._apply_visual_state(state, update=True)
-            self.visual_builder_history.push(state)
-
-        def delete_selected():
-            selection = listbox.curselection()
-            if not selection:
-                return
-            name = listbox.get(selection[0])
-            self.visual_builder_presets.delete(name)
-            self.visual_builder_presets.save_file(self._visual_preset_path())
-            listbox.delete(selection[0])
-
-        ttk.Button(buttons, text="Aplicar", command=apply_selected).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(buttons, text="Eliminar", command=delete_selected).grid(row=0, column=1, sticky="ew", padx=(4, 0))
-        listbox.bind("<Double-1>", lambda _event: apply_selected())
-
-
-    def show_visual_recommendations(self):
-        df_name = self._input_value("visualization", "df_name").strip()
-        df = self.dfs.get(df_name)
-        if df is None:
-            messagebox.showinfo(APP_TITLE, "Selecciona un dataset primero.")
-            return
-        try:
-            recommendations = recommend_visualizations(df)
-        except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"No se pudieron generar recomendaciones:\n{exc}")
-            return
-        if not recommendations:
-            messagebox.showinfo(APP_TITLE, "No se encontraron recomendaciones para este dataset.")
-            return
-        self.visual_recommendations = recommendations
-
-        top = tk.Toplevel(self)
-        top.title(f"Visualizaciones recomendadas - {df_name}")
-        top.geometry("760x480")
-        frame = ttk.Frame(top, padding=10)
-        frame.pack(fill="both", expand=True)
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=2)
-
-        listbox = tk.Listbox(frame)
-        listbox.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        detail = tk.Text(frame, wrap="word", relief="flat", bg="#ffffff")
-        detail.grid(row=0, column=1, sticky="nsew")
-        for rec in recommendations:
-            listbox.insert("end", rec.title)
-
-        def show_detail(_event=None):
-            selection = listbox.curselection()
-            if not selection:
-                return
-            rec = recommendations[selection[0]]
-            detail.delete("1.0", "end")
-            detail.insert("1.0", f"{rec.title}\n\n{rec.reason}\n\nConfiguración:\n{json.dumps(rec.config, ensure_ascii=False, indent=2)}")
-
-        def apply_selected():
-            selection = listbox.curselection()
-            if not selection:
-                return
-            rec = recommendations[selection[0]]
-            try:
-                base = self._collect_visual_builder_config()
-            except Exception:
-                base = {"df_name": df_name}
-            base.update(rec.config)
-            base["df_name"] = df_name
-            top.destroy()
-            self._apply_visual_state(base, update=True)
-            self.visual_builder_history.push(base)
-
-        listbox.bind("<<ListboxSelect>>", show_detail)
-        listbox.bind("<Double-1>", lambda _event: apply_selected())
-        ttk.Button(frame, text="Aplicar recomendación", command=apply_selected, style="Accent.TButton").grid(
-            row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0)
-        )
-        listbox.selection_set(0)
-        show_detail()
+            messagebox.showerror(APP_TITLE, f"No se pudo construir la grafica:\n{exc}")
+            self._log(f"Error en constructor visual: {exc}")
 
 
     def save_visual_builder_output(self):
-        if self.visual_builder_result is None:
-            self.update_visual_builder(show_errors=True)
-        result = self.visual_builder_result
-        state = self.visual_builder_current_config
-        if result is None or state is None:
+        if self.visual_builder_current_data is None or self.visual_builder_current_config is None:
+            self.update_visual_builder()
+
+        if self.visual_builder_current_data is None or self.visual_builder_current_config is None:
             return
 
         try:
             output_root = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR).expanduser()
             output_root.mkdir(parents=True, exist_ok=True)
             stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_dir = output_root / f"{stamp}_visual_builder_v2"
-            run_dir.mkdir(parents=True, exist_ok=True)
+            run_dir = output_root / f"{stamp}_visual_builder"
+            tables_dir = run_dir / "tables"
+            figures_dir = run_dir / "figures"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            figures_dir.mkdir(parents=True, exist_ok=True)
 
-            created = export_plot_result(
-                result,
-                run_dir,
-                basename="visual_builder",
-                formats=("png", "csv", "html"),
-            )
-
-            stats_manifest = {"tables": [], "arrays": [], "objects": [], "html": []}
-            if result.stats is not None:
-                stats_manifest = ArtifactExporter(run_dir).export(result.stats, prefix="visual_builder_stats")
-
-            tables = []
-            if "csv" in created and isinstance(result.data, pd.DataFrame):
-                tables.append({
-                    "name": "visual_builder_data",
-                    "path": str(created["csv"]),
-                    "rows": int(result.data.shape[0]),
-                    "columns": int(result.data.shape[1]),
-                })
-
-            if self.visual_builder_selected_df is not None and not self.visual_builder_selected_df.empty:
-                selected_path = run_dir / "tables" / "visual_builder_selection.csv"
-                selected_path.parent.mkdir(parents=True, exist_ok=True)
-                selection_to_save = self.visual_builder_selected_df.drop(columns=["__source_index__"], errors="ignore")
-                selection_to_save.to_csv(selected_path, index=False, encoding="utf-8-sig")
-                tables.append({
-                    "name": "visual_builder_selection",
-                    "path": str(selected_path),
-                    "rows": int(selection_to_save.shape[0]),
-                    "columns": int(selection_to_save.shape[1]),
-                })
-
-            tables.extend(stats_manifest.get("tables", []))
-            html_items = list(stats_manifest.get("html", []))
-            if "html" in created:
-                html_items.append({"name": "visual_builder_interactive", "path": str(created["html"])})
+            table_path = tables_dir / "visual_builder_data.csv"
+            figure_path = figures_dir / "visual_builder.png"
+            self.visual_builder_current_data.to_csv(table_path, index=False, encoding="utf-8-sig")
+            self.visual_builder_figure.savefig(figure_path, dpi=180, bbox_inches="tight")
 
             manifest = {
-                "tables": tables,
-                "arrays": stats_manifest.get("arrays", []),
-                "objects": stats_manifest.get("objects", []) + ([{"name": "metadata", "path": str(created["metadata"])}] if "metadata" in created else []),
-                "html": html_items,
-                "figures": [str(created["png"])] if "png" in created else [],
-                "analysis": "visual_builder_v2",
+                "tables": [{
+                    "name": "visual_builder_data",
+                    "path": str(table_path),
+                    "rows": int(self.visual_builder_current_data.shape[0]),
+                    "columns": int(self.visual_builder_current_data.shape[1]),
+                }],
+                "arrays": [],
+                "objects": [],
+                "html": [],
+                "figures": [str(figure_path)],
+                "analysis": "visual_builder",
                 "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
-                "parameters": json_safe(state),
+                "parameters": json_safe(self.visual_builder_current_config),
             }
-            if stats_manifest.get("excel_workbook"):
-                manifest["excel_workbook"] = stats_manifest["excel_workbook"]
 
-            manifest_path = run_dir / "manifest.json"
-            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            with (run_dir / "manifest.json").open("w", encoding="utf-8") as fh:
+                json.dump(manifest, fh, ensure_ascii=False, indent=2)
 
             key = self._register_result_manifest(
                 manifest=manifest,
                 run_dir=run_dir,
-                result={"visual_builder_data": result.data, "visual_builder_stats": result.stats},
-                manifest_path=manifest_path,
+                result={"visual_builder_data": self.visual_builder_current_data},
+                manifest_path=run_dir / "manifest.json",
                 select=True,
             )
             self.last_run_dir = run_dir
-            self._log(f"Constructor visual V2 guardado: {run_dir}")
-            self.status_var.set(f"Visualización guardada: {key}")
+            self._log(f"Constructor visual guardado: {run_dir}")
+            self.status_var.set(f"Constructor guardado: {key}")
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"No se pudo guardar el constructor:\n{exc}")
             self._log(f"Error guardando constructor visual: {exc}")
-
-
-    def export_visual_builder_dialog(self):
-        if self.visual_builder_result is None:
-            self.update_visual_builder(show_errors=True)
-        if self.visual_builder_result is None:
-            return
-        directory = filedialog.askdirectory(
-            title="Carpeta para exportar la visualización",
-            initialdir=self.output_dir_var.get() or str(DEFAULT_OUTPUT_DIR),
-        )
-        if not directory:
-            return
-        try:
-            created = export_plot_result(
-                self.visual_builder_result,
-                directory,
-                basename="visualization",
-                formats=("png", "svg", "pdf", "csv", "xlsx", "html"),
-            )
-            self._log("Exportación visual: " + ", ".join(f"{k}={v}" for k, v in created.items()))
-            self.status_var.set(f"Exportados {len(created)} artefactos")
-        except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"No se pudo exportar la visualización:\n{exc}")
-            self._log(f"Error exportando visualización: {exc}")
 
 
     def _set_assistant_text(self, text):
@@ -4172,7 +3288,6 @@ class MicrobiotaGUI(tk.Tk):
         self.refresh_numeric_column_dropdowns()
         self.refresh_categorical_column_dropdowns()
         self.refresh_group_value_dropdowns()
-        self.refresh_visual_filter_candidates()
 
 
     def load_manifest_file(self):
@@ -4819,26 +3934,19 @@ class MicrobiotaGUI(tk.Tk):
             }
 
         if analysis == "visualization":
-            plot_type = self._plot_type_to_backend(values.get("plot_type", "Automático"))
-            x_col = values.get("x_col", "").strip() or None
-            y_col = values.get("y_col", "").strip() or None
-            hue_col = values.get("hue_col", "").strip() or None
-            group_col = hue_col if plot_type in {"violin", "boxplot"} else None
-            violin_cols = [y_col] if plot_type == "violin" and y_col else None
-            rank_mode = parse_bool(values.get("rank_abundance", False)) or plot_type == "rank_abundance"
             return {
                 "df_name": values["df_name"],
-                "x_col": x_col if plot_type in {"auto", "scatter"} else None,
-                "y_col": y_col if plot_type in {"auto", "scatter"} else None,
-                "hue_col": hue_col,
-                "group_col": group_col,
-                "violin_cols": violin_cols,
-                "rank_abundance": rank_mode,
-                "abundance_cols": split_list(values.get("abundance_cols", "")),
-                "abundance_id_col": values.get("abundance_id_col", "").strip() or "ID",
-                "top_n": parse_optional_int(values.get("top_n", "")),
-                "log_scale": parse_bool(values.get("log_scale", True)),
-                "verbose": parse_bool(values.get("verbose", True)),
+                "x_col": values["x_col"].strip() or None,
+                "y_col": values["y_col"].strip() or None,
+                "hue_col": values["hue_col"].strip() or None,
+                "group_col": values["group_col"].strip() or None,
+                "violin_cols": split_list(values["violin_cols"]),
+                "rank_abundance": parse_bool(values["rank_abundance"]),
+                "abundance_cols": split_list(values["abundance_cols"]),
+                "abundance_id_col": values["abundance_id_col"].strip() or "ID",
+                "top_n": parse_optional_int(values["top_n"]),
+                "log_scale": parse_bool(values["log_scale"]),
+                "verbose": parse_bool(values["verbose"]),
             }
 
         if analysis == "kde":

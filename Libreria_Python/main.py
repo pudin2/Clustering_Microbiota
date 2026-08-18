@@ -1,9 +1,9 @@
-from Load import load_multiple_dataframes
-from Caracterization import distribution_plots_from_loaded,normality_tests_from_loaded
-from Kruscall_Wallis import kruskal_wallis_from_loaded
-from Mann_Whitney import mann_whitney_from_loaded
-from KDE import kde_from_loaded
-from DB_Scan import dbscan_from_loaded
+from modules.load import load_multiple_dataframes
+from modules.characterization import distribution_plots_from_loaded,normality_tests_from_loaded
+from modules.kruskal_wallis import kruskal_wallis_from_loaded
+from modules.mann_whitney import mann_whitney_from_loaded
+from modules.kde import kde_from_loaded
+from modules.dbscan import dbscan_from_loaded
 
 dfs = load_multiple_dataframes()
 alpha  = 0.0003

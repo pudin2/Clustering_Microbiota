@@ -3,8 +3,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from Load import load_dataframe_from_path
-from Smart_Assistant import OpenAssistantEngine
+from modules.load import load_dataframe_from_path
+from modules.smart_assistant import OpenAssistantEngine
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -141,18 +141,20 @@ APP_HTML = """<!doctype html>
       <textarea id="question">Quiero comparar glucosa entre grupos de sexo. Que prueba y parametros uso?</textarea>
       <label for="provider">Motor IA</label>
       <select id="provider">
-        <option value="cloud" selected>Qwen Cloud</option>
-        <option value="local">Ollama local</option>
+        <option value="local" selected>Phi-4 Mini / Ollama local</option>
+        <option value="cloud">Cloud compatible</option>
         <option value="rules">Solo reglas</option>
       </select>
       <label for="model">Modelo</label>
-      <input id="model" value="qwen3.5-9b" />
+      <input id="model" value="phi4-mini-reasoning" />
       <div class="actions">
         <button onclick="askAssistant()">Preguntar</button>
         <button class="secondary" onclick="analyzeDatasets()">Analizar datasets</button>
       </div>
       <h2 style="margin-top: 18px;">Respuesta</h2>
       <div id="answer" class="answer muted">Carga datasets o haz una pregunta.</div>
+      <h2 style="margin-top: 18px;">Ruta de pruebas</h2>
+      <pre id="testpath">[]</pre>
       <h2 style="margin-top: 18px;">Parametros sugeridos</h2>
       <pre id="suggestions">{}</pre>
     </section>
@@ -188,6 +190,7 @@ APP_HTML = """<!doctype html>
       const data = await res.json();
       document.getElementById('answer').textContent = data.text || data.error || '';
       document.getElementById('suggestions').textContent = JSON.stringify(data.suggestions || {}, null, 2);
+      document.getElementById('testpath').textContent = JSON.stringify((data.context || {}).test_path || [], null, 2);
     }
     async function analyzeDatasets() {
       document.getElementById('answer').textContent = 'Revisando datasets...';
@@ -195,6 +198,7 @@ APP_HTML = """<!doctype html>
       const data = await res.json();
       document.getElementById('answer').textContent = data.text || data.error || '';
       document.getElementById('suggestions').textContent = JSON.stringify(data.suggestions || {}, null, 2);
+      document.getElementById('testpath').textContent = JSON.stringify((data.context || {}).test_path || [], null, 2);
     }
     loadDatasets();
   </script>
@@ -251,8 +255,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 response = STATE.engine.answer(
                     payload.get("question", ""),
                     selected_dataset=payload.get("dataset") or None,
-                    provider=payload.get("provider") or "cloud",
-                    model=payload.get("model") or "qwen3.5-9b",
+                    provider=payload.get("provider") or "local",
+                    model=payload.get("model") or "phi4-mini-reasoning",
                 )
                 return self._send_response_object(response)
             except Exception as exc:

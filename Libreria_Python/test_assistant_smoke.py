@@ -1,6 +1,6 @@
 import pandas as pd
 
-from Smart_Assistant import OpenAssistantEngine
+from modules.smart_assistant import OpenAssistantEngine
 
 
 def main():

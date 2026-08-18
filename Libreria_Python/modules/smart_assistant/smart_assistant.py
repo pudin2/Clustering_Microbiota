@@ -8,10 +8,22 @@ import numpy as np
 import pandas as pd
 import requests
 
+from modules.math_agent import (
+    DEFAULT_LOCAL_MODEL,
+    DEFAULT_NUM_CTX,
+    DEFAULT_NUM_PREDICT,
+    TEST_CATALOG,
+    build_test_path,
+    compact_result_evidence,
+    format_test_path,
+    preliminary_review,
+    public_catalog,
+)
+
 
 def _load_dotenv_file():
     """Carga un .env sencillo sin agregar una dependencia obligatoria."""
-    candidates = [Path.cwd() / ".env", Path(__file__).resolve().parent / ".env"]
+    candidates = [Path.cwd() / ".env", Path(__file__).resolve().parents[2] / ".env"]
     for path in candidates:
         if not path.exists():
             continue
@@ -75,19 +87,29 @@ class DatasetInspector:
 
         for col in df.columns:
             series = df[col]
+            col_name = str(col)
+            col_norm = unicodedata.normalize("NFKD", col_name.lower())
+            col_norm = "".join(ch for ch in col_norm if not unicodedata.combining(ch))
             non_null = int(series.notna().sum())
             unique = _safe_unique(series)
             numeric = pd.to_numeric(series, errors="coerce")
             numeric_ratio = float(numeric.notna().sum() / non_null) if non_null else 0.0
 
-            if pd.api.types.is_numeric_dtype(series) or numeric_ratio >= 0.85:
-                numeric_cols.append(str(col))
+            explicit_id = (
+                col_norm in {"id", "sample", "sample_id", "subject_id", "patient_id", "codalt", "codigo", "codigo_id"}
+                or col_norm.endswith("_id")
+                or col_norm.startswith("id_")
+            )
+            if explicit_id and non_null > 0 and unique >= max(2, int(0.80 * non_null)):
+                id_like_cols.append(col_name)
+            elif pd.api.types.is_numeric_dtype(series) or numeric_ratio >= 0.85:
+                numeric_cols.append(col_name)
             elif non_null > 0 and unique == non_null:
-                id_like_cols.append(str(col))
+                id_like_cols.append(col_name)
             elif unique <= max(20, int(0.08 * max(len(df), 1))):
-                categorical_cols.append(str(col))
+                categorical_cols.append(col_name)
             else:
-                mixed_cols.append(str(col))
+                mixed_cols.append(col_name)
 
         abundance_like = self._looks_like_abundance_matrix(df, numeric_cols)
         missing_pct = float(df.isna().sum().sum() / max(df.shape[0] * df.shape[1], 1))
@@ -209,6 +231,13 @@ class OpenAssistantEngine:
                 f"- {row['dataset']}: {row['rows']} filas x {row['columns']} columnas; "
                 f"{row['numeric']} numericas, {row['categorical']} categoricas; {kind}."
             )
+            try:
+                info = self.inspector.inspect(row["dataset"])
+                review = preliminary_review(self.dfs[row["dataset"]], info)
+                for flag in (review.get("flags") or [])[:4]:
+                    lines.append(f"  · {flag}")
+            except Exception:
+                pass
 
         first = summary.iloc[0]["dataset"] if len(summary) else None
         suggestions = {}
@@ -223,17 +252,28 @@ class OpenAssistantEngine:
             lines.append("")
             lines.append("Siguiente paso recomendado: ejecuta Exploracion para confirmar tipos, continuidad y bins sugeridos.")
 
+        context = {"summary": summary.to_dict("records")}
+        if first:
+            info = self.inspector.inspect(first)
+            context["preliminary_review"] = preliminary_review(self.dfs[first], info)
+            context["test_path"] = build_test_path(
+                target_analysis="exploration",
+                suggestions=suggestions,
+                info=info,
+                question="revisión preliminar",
+            )
+
         response = AssistantResponse(
             text="\n".join(lines),
             target_analysis="exploration",
             suggestions=suggestions,
-            context={"summary": summary.to_dict("records")},
+            context=context,
         )
         self.last_response = response
         return response
 
 
-    def answer(self, question, selected_dataset=None, provider="cloud", model="qwen3.5-9b", use_ollama=None, base_url=None, api_key=None):
+    def answer(self, question, selected_dataset=None, provider="local", model=DEFAULT_LOCAL_MODEL, use_ollama=None, base_url=None, api_key=None):
         question = str(question or "").strip()
         if not question:
             return AssistantResponse(text="Escribe una pregunta o describe que quieres comparar.")
@@ -248,13 +288,30 @@ class OpenAssistantEngine:
         info = self.inspector.inspect(df_name)
         response = self._heuristic_answer(question, info)
 
+        review = preliminary_review(self.dfs[df_name], info)
+        test_path = build_test_path(
+            target_analysis=response.target_analysis,
+            suggestions=response.suggestions,
+            info=info,
+            question=question,
+        )
+        response.context["preliminary_review"] = review
+        response.context["test_path"] = test_path
+
+        quality_lines = review.get("flags") or []
+        if quality_lines:
+            response.text += "\n\nRevisión preliminar de calidad:\n" + "\n".join(f"- {item}" for item in quality_lines)
+        else:
+            response.text += "\n\nRevisión preliminar de calidad: no detecté alertas estructurales importantes con las reglas automáticas."
+        response.text += "\n\n" + format_test_path(test_path)
+
         # Compatibilidad con versiones anteriores: use_ollama=True fuerza modo local.
         if use_ollama is True:
             provider = "local"
         elif use_ollama is False and provider is None:
             provider = "rules"
 
-        provider = str(provider or "cloud").strip().lower()
+        provider = str(provider or "local").strip().lower()
         if provider not in {"cloud", "local", "rules"}:
             response.warnings.append(f"Proveedor desconocido '{provider}'. Se usaron reglas locales.")
             provider = "rules"
@@ -274,6 +331,8 @@ class OpenAssistantEngine:
                 response.text = response.text + "\n\n" + llm_text
                 response.context["llm_provider"] = provider
                 response.context["llm_model"] = model
+                if getattr(self, "last_llm_metrics", None):
+                    response.context["llm_metrics"] = dict(self.last_llm_metrics)
             except Exception as exc:
                 response.warnings.append(f"No pude usar el modelo {provider}: {exc}")
                 response.text += (
@@ -642,7 +701,7 @@ class OpenAssistantEngine:
     def _dataset_evidence(self, info, max_rows=8):
         """Construye evidencia compacta; evita enviar el dataset completo al modelo."""
         df = self.dfs[info["name"]]
-        numeric = info["numeric_candidates"][:8]
+        numeric = info["numeric_candidates"][:3]
         evidence = {
             "dataset": info["name"],
             "shape": info["shape"],
@@ -669,40 +728,34 @@ class OpenAssistantEngine:
             }
         evidence["numeric_summary"] = summaries
         group_summary = {}
-        for col in info["group_candidates"][:5]:
-            counts = df[col].astype(str).replace("nan", np.nan).dropna().value_counts().head(12)
+        for col in info["group_candidates"][:2]:
+            counts = df[col].astype(str).replace("nan", np.nan).dropna().value_counts().head(6)
             group_summary[col] = {str(k): int(v) for k, v in counts.items()}
         evidence["group_counts"] = group_summary
-        evidence["column_names"] = list(map(str, df.columns[:80]))
+        evidence["column_names"] = list(map(str, df.columns[:24]))
         return evidence
 
 
     def _build_agent_prompt(self, question, info, local_response):
         return {
             "system": (
-                "Eres BioStat Pocket Agent, un equipo virtual de bioestadística para investigación en microbiota, "
-                "nutrición y datos clínicos. Trabajas como cinco especialistas coordinados: "
-                "(1) diseñador de estudio, (2) auditor de calidad y supuestos, (3) selector de pruebas, "
-                "(4) especialista en parámetros y multiplicidad, y (5) intérprete científico. "
-                "No inventes variables ni resultados. Distingue recomendación, supuesto, limitación y decisión. "
-                "No afirmes causalidad a partir de asociaciones. Para microbiota considera composicionalidad, "
-                "ceros, prevalencia, sobredispersión y corrección por múltiples pruebas. "
-                "Responde en español, con secciones: Recomendación, Por qué, Parámetros, Verificaciones, "
-                "Interpretación y Limitaciones. Sé accionable y prudente."
+                "Eres un agente matemático que REVISA una ruta estadística ya propuesta por Python. "
+                "No calcules ni inventes estadísticos, p-valores o resultados. Usa solo allowed_tests y sus paths reales. "
+                "Responde en español y muy breve: 1) Validación de ruta, 2) Ajustes necesarios, 3) Qué resultado habilita el siguiente paso. "
+                "Si falta una prueba, escribe 'prueba aún no implementada'. No repitas la evidencia ni expliques teoría básica."
             ),
             "user": {
                 "question": question,
                 "dataset_evidence": self._dataset_evidence(info),
+                "preliminary_review": local_response.context.get("preliminary_review", {}),
+                "allowed_tests": [{"id": t["id"], "path": t["path"]} for t in public_catalog()],
+                "recommended_test_path": local_response.context.get("test_path", []),
                 "deterministic_engine": {
                     "target_analysis": local_response.target_analysis,
-                    "suggestions": local_response.suggestions,
-                    "warnings": local_response.warnings,
+                    "target_parameters": (local_response.suggestions or {}).get(local_response.target_analysis, {}),
                 },
                 "task": (
-                    "Revisa críticamente la recomendación determinística. Corrígela si es necesario, explica "
-                    "qué prueba usar, qué parámetros configurar, qué diagnósticos ejecutar antes y cómo interpretar "
-                    "los resultados. Si falta información del diseño (pareado, longitudinal, covariables, outcome, "
-                    "unidad experimental), indícalo explícitamente y ofrece decisiones condicionales."
+                    "Valida o corrige la ruta determinista. Sé breve. No inventes valores numéricos."
                 ),
             },
         }
@@ -715,24 +768,100 @@ class OpenAssistantEngine:
         return self._cloud_answer(prompt, model=model, base_url=base_url, api_key=api_key)
 
 
-    def _ollama_answer(self, prompt, model="qwen3.5:9b"):
-        url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/api/generate"
-        response = requests.post(
-            url,
-            json={
-                "model": model,
-                "prompt": json.dumps(prompt, ensure_ascii=False),
-                "stream": False,
-                "options": {"temperature": 0.15, "num_ctx": 16384},
+    def _ollama_answer(self, prompt, model=DEFAULT_LOCAL_MODEL):
+        """Consulta Ollama local con un payload compacto y errores diagnósticos.
+
+        La GUI usa un contexto algo mayor que el benchmark porque adjunta evidencia
+        estructurada del dataset. Se mantiene la salida corta para no penalizar el tiempo.
+        """
+        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        env_model = os.getenv("OLLAMA_MODEL", DEFAULT_LOCAL_MODEL)
+        model = (model or "").strip() or env_model
+        # La GUI necesita más contexto que el benchmark corto. 4K sigue siendo un
+        # contexto conservador para Phi-4 Mini Q4 y evita 400 por prompts reales.
+        num_ctx = int(os.getenv("OLLAMA_AGENT_NUM_CTX", os.getenv("OLLAMA_NUM_CTX", "4096")))
+        num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", str(DEFAULT_NUM_PREDICT)))
+        keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": json.dumps(prompt["user"], ensure_ascii=False, separators=(",", ":"))},
+            ],
+            "stream": False,
+            "keep_alive": keep_alive,
+            "options": {
+                "temperature": float(os.getenv("OLLAMA_TEMPERATURE", "0.05")),
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
             },
-            timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "90")),
-        )
-        response.raise_for_status()
+        }
+
+        try:
+            response = requests.post(
+                base + "/api/chat",
+                json=payload,
+                timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "180")),
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"No fue posible conectar con Ollama en {base}: {exc}") from exc
+
+        if not response.ok:
+            detail = ""
+            try:
+                body = response.json()
+                detail = str(body.get("error") or body)
+            except Exception:
+                detail = (response.text or "").strip()
+            detail = detail or "sin detalle devuelto por Ollama"
+            raise RuntimeError(
+                f"Ollama HTTP {response.status_code}: {detail} "
+                f"[modelo={model}, num_ctx={num_ctx}]"
+            )
+
         data = response.json()
-        text = data.get("response", "").strip()
+        ns = 1_000_000_000
+        eval_count = int(data.get("eval_count") or 0)
+        eval_duration = int(data.get("eval_duration") or 0)
+        self.last_llm_metrics = {
+            "total_seconds": round(float(data.get("total_duration") or 0) / ns, 3),
+            "load_seconds": round(float(data.get("load_duration") or 0) / ns, 3),
+            "prompt_seconds": round(float(data.get("prompt_eval_duration") or 0) / ns, 3),
+            "generation_seconds": round(eval_duration / ns, 3),
+            "prompt_tokens": int(data.get("prompt_eval_count") or 0),
+            "generated_tokens": eval_count,
+            "tokens_per_second": round(eval_count / (eval_duration / ns), 2) if eval_count and eval_duration else None,
+            "num_ctx": num_ctx,
+            "num_predict": num_predict,
+            "model": model,
+        }
+        text = ((data.get("message") or {}).get("content") or "").strip()
         if not text:
             raise RuntimeError("Ollama respondió sin texto.")
-        return "Revisión del agente local:\n" + text
+        return "Revisión de Phi-4 Mini Reasoning:\n" + text
+
+
+    def interpret_results(self, result_evidence, question="Interpreta estos resultados", provider="local",
+                          model=DEFAULT_LOCAL_MODEL, base_url=None, api_key=None):
+        """Interpreta evidencia real ya calculada. Nunca solicita al LLM recalcular estadísticos."""
+        evidence = dict(result_evidence or {})
+        prompt = {
+            "system": (
+                "Interpreta resultados calculados por Python. No recalcules ni inventes valores. "
+                "Responde muy breve en español: Hallazgo, Limitación y Siguiente paso."
+            ),
+            "user": {
+                "question": question,
+                "result_evidence": evidence,
+                "allowed_tests": [{"id": t["id"], "path": t["path"]} for t in public_catalog()],
+            },
+        }
+        provider = str(provider or "local").lower()
+        if provider == "rules":
+            return "Interpretación IA omitida porque el proveedor seleccionado es 'rules'."
+        if provider == "local":
+            return self._ollama_answer(prompt, model=model).replace("Revisión de Phi-4 Mini Reasoning:", "Interpretación de Phi-4 Mini Reasoning:", 1)
+        return self._cloud_answer(prompt, model=model, base_url=base_url, api_key=api_key).replace("Revisión del agente cloud:", "Interpretación del agente cloud:", 1)
 
 
     def _cloud_answer(self, prompt, model="qwen3.5-9b", base_url=None, api_key=None):
