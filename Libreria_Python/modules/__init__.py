@@ -1,1 +1,0 @@
-"""Paquetes funcionales del proyecto."""
