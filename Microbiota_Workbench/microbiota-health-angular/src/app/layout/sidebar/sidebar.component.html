@@ -1,0 +1,14 @@
+<aside class="sidebar" [class.collapsed]="state.sidebarCollapsed()">
+  <div class="brand-row"><div class="brand-mark">B</div><div class="brand-copy"><strong>BioInsight</strong><span>Health Lab</span></div><button class="icon-button collapse-button" (click)="state.toggleSidebar()" data-tooltip="Contraer o expandir menú">☰</button></div>
+  <div class="project-chip"><span class="project-dot"></span><div><strong>Proyecto académico</strong><small>Microbiota clínica · 2026-2</small></div></div>
+  <nav class="main-nav">
+    <a routerLink="/inicio" routerLinkActive="active"><span>⌂</span><em>Inicio</em></a>
+    <a routerLink="/datasets" routerLinkActive="active"><span>▤</span><em>Datasets</em><b>{{ state.datasets().length }}</b></a>
+    <a routerLink="/analisis/exploration" routerLinkActive="active"><span>⌁</span><em>Análisis</em></a>
+    <a routerLink="/asistente" routerLinkActive="active"><span>✦</span><em>Asistente IA</em></a>
+    <a routerLink="/resultados" routerLinkActive="active"><span>▥</span><em>Resultados</em><b>3</b></a>
+  </nav>
+  <div class="sidebar-section-title">Herramientas rápidas</div>
+  <div class="quick-links"><button (click)="openAnalysis('exploration')">Exploración</button><button (click)="openAnalysis('normality')">Normalidad</button><button (click)="openAnalysis('correlation')">Correlación</button><button (click)="openAnalysis('dbscan')">DBSCAN</button></div>
+  <div class="sidebar-footer"><div class="avatar">EG</div><div><strong>Investigador</strong><small>Sesión local</small></div><button class="icon-button">⚙</button></div>
+</aside>

@@ -1,0 +1,10 @@
+<div class="app-shell" [class.sidebar-collapsed]="state.sidebarCollapsed()">
+  <app-sidebar />
+  <main class="workspace">
+    <app-topbar />
+    <section class="content-scroll">
+      <router-outlet />
+    </section>
+  </main>
+  @if (state.toast()) { <div class="toast">✓ {{ state.toast() }}</div> }
+</div>

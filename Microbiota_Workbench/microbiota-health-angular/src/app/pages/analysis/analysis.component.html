@@ -1,0 +1,1263 @@
+<div
+  class="analysis-layout"
+  (click)="closeAllDropdowns()"
+>
+  <!-- =====================================================
+       CATÁLOGO LATERAL
+  ====================================================== -->
+
+  <aside
+    class="analysis-catalog"
+    (click)="$event.stopPropagation()"
+  >
+    <span class="catalog-title">
+      HERRAMIENTAS
+    </span>
+
+    @for (
+      item of state.analyses;
+      track item.key
+    ) {
+      <button
+        type="button"
+        [class.active]="
+          state.selectedAnalysis() === item.key
+        "
+        (click)="select(item.key)"
+        [attr.data-tooltip]="item.description"
+      >
+        <i>
+          {{ item.icon }}
+        </i>
+
+        <div>
+          <strong>
+            {{ item.name }}
+          </strong>
+
+          <small>
+            {{ item.category }}
+          </small>
+        </div>
+      </button>
+    }
+  </aside>
+
+
+  <!-- =====================================================
+       PANEL PRINCIPAL
+  ====================================================== -->
+
+  <section class="analysis-panel">
+
+    <!-- Encabezado -->
+
+    <header class="panel-heading">
+      <div class="big-icon">
+        {{ state.selectedAnalysisData().icon }}
+      </div>
+
+      <div class="panel-heading-copy">
+        <span>
+          {{ state.selectedAnalysisData().category }}
+        </span>
+
+        <h2>
+          {{ state.selectedAnalysisData().name }}
+        </h2>
+
+        <p>
+          {{ state.selectedAnalysisData().description }}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        class="icon-button"
+        [attr.data-tooltip]="
+          currentForm()?.description ??
+          'Perfila tipos de datos, valores faltantes y características de las variables.'
+        "
+        aria-label="Ayuda del análisis"
+      >
+        ?
+      </button>
+    </header>
+
+
+    <!-- ===================================================
+         EXPLORACIÓN
+    ==================================================== -->
+
+    @if (
+      state.selectedAnalysis() ===
+      'exploration'
+    ) {
+      <section class="form-card exploration-card">
+
+        <div class="form-section-title">
+          <div>
+            <span>
+              CONFIGURACIÓN
+            </span>
+
+            <h3>
+              Selecciona los datos que deseas explorar
+            </h3>
+
+            <p>
+              Elige el dataset principal y define si quieres
+              analizar todas sus variables o solamente algunas
+              columnas.
+            </p>
+          </div>
+
+          <span class="required-note">
+            Dataset obligatorio *
+          </span>
+        </div>
+
+
+        <div class="exploration-form">
+
+          <!-- Dataset principal -->
+
+          <label class="field-block">
+            <span class="field-label">
+              Dataset principal
+
+              <b
+                data-tooltip="Archivo que contiene las variables utilizadas en la exploración."
+              >
+                ?
+              </b>
+            </span>
+
+            <select
+              [ngModel]="state.selectedDataset()"
+              (ngModelChange)="changeDataset($event)"
+            >
+              @for (
+                dataset of state.datasets();
+                track dataset.id
+              ) {
+                <option [value]="dataset.key">
+                  {{ dataset.name }}
+                </option>
+              }
+            </select>
+
+            @for (
+              dataset of state.datasets();
+              track dataset.id
+            ) {
+              @if (
+                dataset.key ===
+                state.selectedDataset()
+              ) {
+                <small>
+                  {{ dataset.rows }} filas ·
+                  {{ dataset.columns }} columnas ·
+                  {{ dataset.status }}
+                </small>
+              }
+            }
+          </label>
+
+
+          <!-- Selector de variables -->
+
+          <div class="variables-selector">
+            <div class="variables-selector-heading">
+              <div>
+                <span class="field-label">
+                  Variables para explorar
+
+                  <b
+                    data-tooltip="Selecciona todas las variables o marca únicamente las columnas que deseas incluir."
+                  >
+                    ?
+                  </b>
+                </span>
+
+                <small>
+                  Puedes seleccionar una o varias variables.
+                </small>
+              </div>
+
+              @if (!allVariablesSelected()) {
+                <button
+                  type="button"
+                  class="reset-selection-button"
+                  (click)="resetVariables()"
+                >
+                  Restablecer
+                </button>
+              }
+            </div>
+
+
+            <div
+              class="variables-dropdown"
+              (click)="$event.stopPropagation()"
+            >
+              <button
+                type="button"
+                class="variables-dropdown-trigger"
+                [class.open]="
+                  variablesDropdownOpen()
+                "
+                (click)="toggleVariablesDropdown()"
+                [attr.aria-expanded]="
+                  variablesDropdownOpen()
+                "
+              >
+                <div class="dropdown-trigger-copy">
+                  <span class="dropdown-value">
+                    {{ variablesDropdownLabel() }}
+                  </span>
+
+                  <small>
+                    {{ variablesDescription() }}
+                  </small>
+                </div>
+
+                <span
+                  class="dropdown-arrow"
+                  [class.rotated]="
+                    variablesDropdownOpen()
+                  "
+                >
+                  ▾
+                </span>
+              </button>
+
+
+              @if (variablesDropdownOpen()) {
+                <div class="variables-dropdown-menu">
+
+                  <div class="dropdown-menu-header">
+                    <div>
+                      <strong>
+                        Seleccionar variables
+                      </strong>
+
+                      <small>
+                        {{ availableVariables().length }}
+                        columnas disponibles
+                      </small>
+                    </div>
+
+                    <span class="dropdown-counter">
+                      @if (allVariablesSelected()) {
+                        Todas
+                      } @else {
+                        {{ selectedVariables().length }}
+                        seleccionadas
+                      }
+                    </span>
+                  </div>
+
+
+                  <div class="variables-options">
+
+                    <button
+                      type="button"
+                      class="variable-option all-option"
+                      [class.selected]="
+                        allVariablesSelected()
+                      "
+                      (click)="selectAllVariables()"
+                    >
+                      <span
+                        class="option-checkbox"
+                        [class.checked]="
+                          allVariablesSelected()
+                        "
+                      >
+                        @if (allVariablesSelected()) {
+                          ✓
+                        }
+                      </span>
+
+                      <span class="option-copy">
+                        <strong>
+                          Todas las variables
+                        </strong>
+
+                        <small>
+                          Analizar las
+                          {{ availableVariables().length }}
+                          columnas disponibles
+                        </small>
+                      </span>
+                    </button>
+
+
+                    <div class="options-divider">
+                      <span>
+                        O selecciona variables específicas
+                      </span>
+                    </div>
+
+
+                    @for (
+                      variable of availableVariables();
+                      track variable
+                    ) {
+                      <button
+                        type="button"
+                        class="variable-option"
+                        [class.selected]="
+                          isVariableSelected(variable)
+                        "
+                        (click)="toggleVariable(variable)"
+                      >
+                        <span
+                          class="option-checkbox"
+                          [class.checked]="
+                            isVariableSelected(variable)
+                          "
+                        >
+                          @if (
+                            isVariableSelected(variable)
+                          ) {
+                            ✓
+                          }
+                        </span>
+
+                        <span class="option-copy">
+                          <strong>
+                            {{ variable }}
+                          </strong>
+                        </span>
+                      </button>
+                    }
+                  </div>
+
+
+                  <div class="dropdown-menu-footer">
+                    <div>
+                      @if (allVariablesSelected()) {
+                        <strong>
+                          Todas las variables
+                        </strong>
+
+                        <small>
+                          Se analizará el dataset completo.
+                        </small>
+                      } @else {
+                        <strong>
+                          {{ selectedVariables().length }}
+                          variables seleccionadas
+                        </strong>
+
+                        <small>
+                          Solo estas columnas serán analizadas.
+                        </small>
+                      }
+                    </div>
+
+                    <button
+                      type="button"
+                      class="confirm-selection-button"
+                      (click)="toggleVariablesDropdown()"
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+
+                </div>
+              }
+            </div>
+
+
+            <div
+              class="selection-summary"
+              [class.all-selected]="
+                allVariablesSelected()
+              "
+            >
+              <span class="summary-icon">
+                @if (allVariablesSelected()) {
+                  ✓
+                } @else {
+                  {{ selectedVariables().length }}
+                }
+              </span>
+
+              <div>
+                @if (allVariablesSelected()) {
+                  <strong>
+                    Se analizarán todas las variables
+                  </strong>
+
+                  <small>
+                    La exploración incluirá las
+                    {{ availableVariables().length }}
+                    columnas disponibles.
+                  </small>
+                } @else {
+                  <strong>
+                    Selección personalizada
+                  </strong>
+
+                  <small>
+                    Se analizarán únicamente
+                    {{ selectedVariables().length }}
+                    variables.
+                  </small>
+                }
+              </div>
+            </div>
+
+
+            @if (!allVariablesSelected()) {
+              <div class="selected-variables">
+                <div class="selected-variables-header">
+                  <span>
+                    VARIABLES SELECCIONADAS
+                  </span>
+
+                  <button
+                    type="button"
+                    (click)="selectAllVariables()"
+                  >
+                    Usar todas
+                  </button>
+                </div>
+
+                <div class="variable-chips">
+                  @for (
+                    variable of selectedVariables();
+                    track variable
+                  ) {
+                    <button
+                      type="button"
+                      class="variable-chip"
+                      (click)="toggleVariable(variable)"
+                    >
+                      <span>
+                        {{ variable }}
+                      </span>
+
+                      <b>×</b>
+                    </button>
+                  }
+                </div>
+              </div>
+            }
+
+          </div>
+        </div>
+      </section>
+
+
+      <!-- Tarjeta informativa de Exploración -->
+
+      <section class="recommendation-card">
+        <span class="recommendation-icon">
+          ✦
+        </span>
+
+        <div class="recommendation-copy">
+          <strong>
+            Resultado de la exploración
+          </strong>
+
+          <p>
+            Se generarán perfiles de columnas, tipos de datos,
+            valores faltantes, roles inferidos y resúmenes
+            numéricos o categóricos.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          class="assistant-button"
+          (click)="goToAssistant()"
+          data-tooltip="Consulta al asistente para recibir orientación metodológica."
+        >
+          <span>✦</span>
+          Preguntar al asistente
+          <b>→</b>
+        </button>
+      </section>
+
+    } @else {
+
+
+      <!-- =================================================
+           FORMULARIOS DINÁMICOS
+      ================================================== -->
+
+      @if (currentForm(); as form) {
+
+        <div class="dynamic-analysis-intro">
+          <div>
+            <span>
+              CONFIGURACIÓN DEL ANÁLISIS
+            </span>
+
+            <h3>
+              {{ form.title }}
+            </h3>
+
+            <p>
+              {{ form.description }}
+            </p>
+          </div>
+
+          <div class="analysis-status-chip">
+            <span></span>
+            Frontend académico
+          </div>
+        </div>
+
+
+        <div class="dynamic-sections">
+          @for (
+            section of form.sections;
+            track section.key
+          ) {
+            <section class="form-card parameter-section">
+
+              <div class="form-section-title">
+                <div>
+                  <span>
+                    {{ section.eyebrow ?? 'CONFIGURACIÓN' }}
+                  </span>
+
+                  <h3>
+                    {{ section.title }}
+                  </h3>
+
+                  @if (section.description) {
+                    <p>
+                      {{ section.description }}
+                    </p>
+                  }
+                </div>
+                <span class="section-field-count">
+                {{ section.fields.length }}
+                parámetros
+                </span>
+              </div>
+
+
+              <div class="dynamic-form-grid">
+
+                @for (
+                  field of section.fields;
+                  track field.key
+                ) {
+                  @if (isFieldVisible(field)) {
+
+                    <div
+                      class="dynamic-field"
+                      [class.full-width]="
+                        field.fullWidth ||
+                        field.columnSpan === 2
+                      "
+                      [class.boolean-field]="
+                        field.type === 'boolean'
+                      "
+                    >
+
+                      <!-- ===================================
+                           BOOLEANO
+                      ==================================== -->
+
+                      @if (field.type === 'boolean') {
+                        <label class="boolean-control">
+                          <div class="boolean-copy">
+                            <span class="field-label">
+                              {{ field.label }}
+
+                              <b
+                                [attr.data-tooltip]="field.help"
+                              >
+                                ?
+                              </b>
+                            </span>
+
+                            @if (field.description) {
+                              <small>
+                                {{ field.description }}
+                              </small>
+                            }
+                          </div>
+
+                          <input
+                            type="checkbox"
+                            [ngModel]="
+                              getBooleanValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateBooleanField(
+                                field.key,
+                                $event
+                              )
+                            "
+                          />
+
+                          <span class="toggle-switch">
+                            <i></i>
+                          </span>
+                        </label>
+
+                      } @else {
+
+                        <label class="field-label">
+                          {{ field.label }}
+
+                          @if (field.required) {
+                            <em>*</em>
+                          }
+
+                          <b
+                            [attr.data-tooltip]="field.help"
+                          >
+                            ?
+                          </b>
+                        </label>
+
+
+                        <!-- ===============================
+                             DATASET
+                        ================================ -->
+
+                        @if (field.type === 'dataset') {
+                          <select
+                            class="standard-control"
+                            [ngModel]="
+                              getStringValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateTextField(
+                                field.key,
+                                $event
+                              )
+                            "
+                          >
+                            <option value="">
+                              Selecciona un dataset
+                            </option>
+
+                            @for (
+                              dataset of state.datasets();
+                              track dataset.id
+                            ) {
+                              <option
+                                [value]="dataset.key"
+                              >
+                                {{ dataset.name }}
+                              </option>
+                            }
+                          </select>
+                        }
+
+
+                        <!-- ===============================
+                             COLUMNA
+                        ================================ -->
+
+                        @if (field.type === 'column') {
+                          <select
+                            class="standard-control"
+                            [ngModel]="
+                              getStringValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateTextField(
+                                field.key,
+                                $event
+                              )
+                            "
+                          >
+                            <option value="">
+                              Selecciona una columna
+                            </option>
+
+                            @for (
+                              column of getColumnsForField(field);
+                              track column
+                            ) {
+                              <option [value]="column">
+                                {{ column }}
+                              </option>
+                            }
+                          </select>
+                        }
+
+
+                        <!-- ===============================
+                             SELECT ESTÁNDAR
+                        ================================ -->
+
+                        @if (field.type === 'select') {
+                          <select
+                            class="standard-control"
+                            [ngModel]="getFieldValue(field.key)"
+                            (ngModelChange)="
+                              updateField(
+                                field.key,
+                                $event
+                              )
+                            "
+                          >
+                            @for (
+                              option of field.options ?? [];
+                              track option.value
+                            ) {
+                              <option
+                                [ngValue]="option.value"
+                              >
+                                {{ option.label }}
+                              </option>
+                            }
+                          </select>
+                        }
+
+
+                        <!-- ===============================
+                             NÚMERO
+                        ================================ -->
+
+                        @if (field.type === 'number') {
+                          <input
+                            type="number"
+                            class="standard-control"
+                            [ngModel]="
+                              getNumberValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateNumberField(
+                                field.key,
+                                $event
+                              )
+                            "
+                            [min]="field.min ?? null"
+                            [max]="field.max ?? null"
+                            [step]="field.step ?? 1"
+                            [placeholder]="
+                              field.placeholder ?? ''
+                            "
+                          />
+                        }
+
+
+                        <!-- ===============================
+                             TEXTO
+                        ================================ -->
+
+                        @if (field.type === 'text') {
+                          <input
+                            type="text"
+                            class="standard-control"
+                            [ngModel]="
+                              getStringValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateTextField(
+                                field.key,
+                                $event
+                              )
+                            "
+                            [placeholder]="
+                              field.placeholder ?? ''
+                            "
+                          />
+                        }
+
+
+                        <!-- ===============================
+                             TEXTAREA
+                        ================================ -->
+
+                        @if (field.type === 'textarea') {
+                          <textarea
+                            class="standard-control textarea-control"
+                            [ngModel]="
+                              getStringValue(field.key)
+                            "
+                            (ngModelChange)="
+                              updateTextField(
+                                field.key,
+                                $event
+                              )
+                            "
+                            [placeholder]="
+                              field.placeholder ?? ''
+                            "
+                            rows="4"
+                          ></textarea>
+                        }
+
+
+                        <!-- ===============================
+                             SELECTORES MÚLTIPLES
+                        ================================ -->
+
+                        @if (
+                          field.type === 'variables' ||
+                          field.type === 'group-values'
+                        ) {
+                          <div
+                            class="dynamic-multiple"
+                            (click)="$event.stopPropagation()"
+                          >
+                            <button
+                              type="button"
+                              class="variables-dropdown-trigger"
+                              [class.open]="
+                                isMultipleDropdownOpen(field.key)
+                              "
+                              (click)="
+                                toggleMultipleDropdown(field.key)
+                              "
+                            >
+                              <div class="dropdown-trigger-copy">
+                                <span class="dropdown-value">
+                                  {{
+                                    getMultipleFieldLabel(field)
+                                  }}
+                                </span>
+
+                                <small>
+                                  {{
+                                    getMultipleFieldDescription(field)
+                                  }}
+                                </small>
+                              </div>
+
+                              <span
+                                class="dropdown-arrow"
+                                [class.rotated]="
+                                  isMultipleDropdownOpen(
+                                    field.key
+                                  )
+                                "
+                              >
+                                ▾
+                              </span>
+                            </button>
+
+
+                            @if (
+                              isMultipleDropdownOpen(field.key)
+                            ) {
+                              <div class="variables-dropdown-menu">
+
+                                <div class="dropdown-menu-header">
+                                  <div>
+                                    <strong>
+                                      {{ field.label }}
+                                    </strong>
+
+                                    <small>
+                                      {{
+                                        getMultipleOptions(field).length
+                                      }}
+                                      opciones disponibles
+                                    </small>
+                                  </div>
+
+                                  <span class="dropdown-counter">
+                                    @if (
+                                      isAllOptionSelected(field)
+                                    ) {
+                                      Todas
+                                    } @else {
+                                      {{
+                                        getArrayValue(field.key).length
+                                      }}
+                                      seleccionadas
+                                    }
+                                  </span>
+                                </div>
+
+
+                                <div class="variables-options">
+
+                                  @if (field.allOption) {
+                                    <button
+                                      type="button"
+                                      class="variable-option all-option"
+                                      [class.selected]="
+                                        isAllOptionSelected(field)
+                                      "
+                                      (click)="selectAllField(field)"
+                                    >
+                                      <span
+                                        class="option-checkbox"
+                                        [class.checked]="
+                                          isAllOptionSelected(field)
+                                        "
+                                      >
+                                        @if (
+                                          isAllOptionSelected(field)
+                                        ) {
+                                          ✓
+                                        }
+                                      </span>
+
+                                      <span class="option-copy">
+                                        <strong>
+                                          Todas las variables
+                                        </strong>
+
+                                        <small>
+                                          Usar todas las columnas
+                                          disponibles
+                                        </small>
+                                      </span>
+                                    </button>
+
+                                    <div class="options-divider">
+                                      <span>
+                                        O selecciona opciones
+                                        específicas
+                                      </span>
+                                    </div>
+                                  }
+
+
+                                  @for (
+                                    option of getMultipleOptions(field);
+                                    track option
+                                  ) {
+                                    <button
+                                      type="button"
+                                      class="variable-option"
+                                      [class.selected]="
+                                        isMultipleValueSelected(
+                                          field.key,
+                                          option
+                                        )
+                                      "
+                                      (click)="
+                                        toggleMultipleValue(
+                                          field,
+                                          option
+                                        )
+                                      "
+                                    >
+                                      <span
+                                        class="option-checkbox"
+                                        [class.checked]="
+                                          isMultipleValueSelected(
+                                            field.key,
+                                            option
+                                          )
+                                        "
+                                      >
+                                        @if (
+                                          isMultipleValueSelected(
+                                            field.key,
+                                            option
+                                          )
+                                        ) {
+                                          ✓
+                                        }
+                                      </span>
+
+                                      <span class="option-copy">
+                                        <strong>
+                                          {{ option }}
+                                        </strong>
+                                      </span>
+                                    </button>
+                                  }
+
+
+                                  @if (
+                                    getMultipleOptions(field).length === 0
+                                  ) {
+                                    <div class="empty-options">
+                                      <span>⌕</span>
+
+                                      <strong>
+                                        Sin opciones disponibles
+                                      </strong>
+
+                                      <small>
+                                        Selecciona primero el dataset
+                                        y la columna correspondiente.
+                                      </small>
+                                    </div>
+                                  }
+                                </div>
+
+
+                                <div class="dropdown-menu-footer">
+                                  <div>
+                                    @if (
+                                      field.allOption &&
+                                      isAllOptionSelected(field)
+                                    ) {
+                                      <strong>
+                                        Todas las variables
+                                      </strong>
+
+                                      <small>
+                                        Se incluirán todas las
+                                        opciones disponibles.
+                                      </small>
+                                    } @else {
+                                      <strong>
+                                        {{
+                                          getArrayValue(field.key).length
+                                        }}
+                                        seleccionadas
+                                      </strong>
+
+                                      <small>
+                                        @if (
+                                          field.type ===
+                                          'group-values'
+                                        ) {
+                                          Selecciona exactamente
+                                          dos grupos.
+                                        } @else {
+                                          Selección personalizada.
+                                        }
+                                      </small>
+                                    }
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    class="confirm-selection-button"
+                                    (click)="
+                                      toggleMultipleDropdown(
+                                        field.key
+                                      )
+                                    "
+                                  >
+                                    Confirmar
+                                  </button>
+                                </div>
+
+                              </div>
+                            }
+
+
+                            @if (
+                              getArrayValue(field.key).length > 0
+                            ) {
+                              <div class="compact-chips">
+                                @for (
+                                  value of getArrayValue(field.key);
+                                  track value
+                                ) {
+                                  <button
+                                    type="button"
+                                    class="variable-chip"
+                                    (click)="
+                                      toggleMultipleValue(
+                                        field,
+                                        value
+                                      )
+                                    "
+                                  >
+                                    <span>
+                                      {{ value }}
+                                    </span>
+
+                                    <b>×</b>
+                                  </button>
+                                }
+                              </div>
+                            }
+                          </div>
+                        }
+
+
+                        @if (field.description) {
+                          <small class="field-description">
+                            {{ field.description }}
+                          </small>
+                        }
+                      }
+
+                    </div>
+                  }
+                }
+
+              </div>
+            </section>
+          }
+        </div>
+
+
+        <!-- ===============================================
+             VISTA PREVIA DE VISUALIZACIONES
+        ================================================ -->
+
+        @if (
+          form.previewType ===
+          'visual-builder'
+        ) {
+          <section class="visual-preview-card">
+            <div class="visual-preview-heading">
+              <div>
+                <span>
+                  VISTA INTERACTIVA
+                </span>
+
+                <h3>
+                  Constructor visual
+                </h3>
+
+                <p>
+                  La vista se actualizará con las variables y
+                  capas seleccionadas.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                class="soft-button"
+              >
+                Actualizar vista
+              </button>
+            </div>
+
+            <div class="visual-preview-canvas">
+              <div class="preview-grid-lines"></div>
+
+              <div class="preview-points">
+                <i style="left: 12%; bottom: 24%"></i>
+                <i style="left: 21%; bottom: 31%"></i>
+                <i style="left: 30%; bottom: 39%"></i>
+                <i style="left: 39%; bottom: 35%"></i>
+                <i style="left: 49%; bottom: 52%"></i>
+                <i style="left: 58%; bottom: 57%"></i>
+                <i style="left: 68%; bottom: 61%"></i>
+                <i style="left: 78%; bottom: 73%"></i>
+                <i style="left: 87%; bottom: 69%"></i>
+              </div>
+
+              <div class="preview-trend-line"></div>
+
+              <span>
+                Selecciona X, Y y las capas visuales
+              </span>
+            </div>
+          </section>
+        }
+
+
+        <!-- ===============================================
+             RECOMENDACIÓN DINÁMICA
+        ================================================ -->
+
+        <section class="recommendation-card">
+          <span class="recommendation-icon">
+            ✦
+          </span>
+
+          <div class="recommendation-copy">
+            <strong>
+              {{ form.recommendationTitle }}
+            </strong>
+
+            <p>
+              {{ form.recommendationText }}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            class="assistant-button"
+            (click)="goToAssistant()"
+            data-tooltip="Consulta al asistente sobre la selección de pruebas, parámetros e interpretación."
+          >
+            <span>✦</span>
+            Preguntar al asistente
+            <b>→</b>
+          </button>
+        </section>
+
+      } @else {
+        <section class="form-card unavailable-card">
+          <div class="unavailable-icon">
+            !
+          </div>
+
+          <div>
+            <span>
+              FORMULARIO NO DISPONIBLE
+            </span>
+
+            <h3>
+              No se encontró la configuración
+            </h3>
+
+            <p>
+              Revisa que este análisis esté definido dentro de
+              <code>analysis-form.config.ts</code>.
+            </p>
+          </div>
+        </section>
+      }
+    }
+
+
+    <!-- ===================================================
+         PIE GENERAL
+    ==================================================== -->
+
+    <footer class="panel-footer">
+
+      <div class="execution-summary">
+        <span>
+          Configuración actual
+        </span>
+
+        <strong>
+          {{ getCurrentDatasetName() }}
+        </strong>
+
+        <small>
+          {{ getCurrentSelectionSummary() }}
+        </small>
+      </div>
+
+
+      <div class="footer-actions">
+        <button
+          type="button"
+          class="soft-button"
+          (click)="resetCurrentForm()"
+          [disabled]="state.analysisRunning()"
+        >
+          Restablecer
+        </button>
+
+        <button
+          type="button"
+          class="primary-button run-button"
+          (click)="run()"
+          [disabled]="
+            state.analysisRunning() ||
+            !canRunCurrentAnalysis()
+          "
+        >
+          @if (state.analysisRunning()) {
+            <span class="loading-spinner"></span>
+
+            {{ getRunningLabel() }}
+          } @else {
+            {{ getActionLabel() }}
+
+            <span>→</span>
+          }
+        </button>
+      </div>
+
+    </footer>
+
+  </section>
+</div>

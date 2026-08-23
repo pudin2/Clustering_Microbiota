@@ -1,0 +1,2 @@
+import { Component, inject } from '@angular/core'; import { Router } from '@angular/router'; import { WorkbenchStateService } from '../../services/workbench-state.service'; import { AnalysisKey } from '../../models/app.models';
+@Component({selector:'app-home',standalone:true,templateUrl:'./home.component.html',styleUrl:'./home.component.css'}) export class HomeComponent{readonly state=inject(WorkbenchStateService);private router=inject(Router);open(key:AnalysisKey){this.state.selectAnalysis(key);void this.router.navigate(['/analisis',key]);}}
